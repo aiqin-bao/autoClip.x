@@ -12,9 +12,9 @@ from sqlalchemy.orm import Session
 from backend.core.database import SessionLocal
 from backend.models.project import Project, ProjectStatus
 from backend.models.task import Task, TaskStatus
-from backend.services.progress_update_service import progress_update_service
 # from backend.services.pipeline_adapter import PipelineAdapter  # 临时注释，文件不存在
-from backend.utils.task_submission_utils import submit_video_pipeline_task
+from backend.core.task_manager import task_manager as _task_manager
+from backend.tasks.processing import _run_pipeline_sync as _pipeline_fn
 
 logger = logging.getLogger(__name__)
 
@@ -90,9 +90,6 @@ class AutoPipelineService:
                 
                 logger.info(f"项目 {project_id} 状态已更新为处理中")
                 
-                # 启动进度监控
-                await progress_update_service.start_progress_monitoring(task.id)
-                
                 # 提交Celery任务
                 logger.info(f"准备提交Celery任务: {project_id}")
                 
@@ -110,16 +107,22 @@ class AutoPipelineService:
                 logger.info(f"视频文件: {input_video_path}")
                 logger.info(f"字幕文件: {input_srt_path if Path(input_srt_path).exists() else '不存在'}")
                 
-                # 提交Celery任务
-                task_result = submit_video_pipeline_task(project_id, input_video_path, input_srt_path)
-                logger.info(f"Celery任务提交结果: {task_result}")
-                
-                if task_result.get('success'):
-                    celery_task_id = task_result['task_id']
-                    logger.info(f"Celery任务已提交: {celery_task_id}")
-                    
+                # 提交 TaskManager 任务
+                import asyncio
+                srt_path_str = input_srt_path if Path(input_srt_path).exists() else None
+                try:
+                    loop = asyncio.get_running_loop()
+                    loop.create_task(_task_manager.submit(
+                        f"pipeline_{project_id}", _pipeline_fn, project_id, input_video_path, srt_path_str
+                    ))
+                except RuntimeError:
+                    asyncio.run(_task_manager.submit(
+                        f"pipeline_{project_id}", _pipeline_fn, project_id, input_video_path, srt_path_str
+                    ))
+                logger.info(f"任务已提交到 TaskManager: pipeline_{project_id}")
+
+                if True:
                     # 更新任务记录
-                    task.celery_task_id = celery_task_id
                     task.status = TaskStatus.RUNNING
                     task.started_at = datetime.utcnow()
                     db.commit()
@@ -129,7 +132,7 @@ class AutoPipelineService:
                         "message": "流水线处理已启动",
                         "project_id": project_id,
                         "task_id": task.id,
-                        "celery_task_id": celery_task_id
+                        "pipeline_key": f"pipeline_{project_id}",
                     }
                 else:
                     error_msg = task_result.get('error', '未知错误')

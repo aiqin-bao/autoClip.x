@@ -10,9 +10,7 @@ from sqlalchemy.orm import Session
 from backend.core.database import get_db
 from backend.services.project_service import ProjectService
 from backend.services.processing_service import ProcessingService
-from backend.services.websocket_notification_service import WebSocketNotificationService
-from backend.tasks.processing import process_video_pipeline
-from backend.core.websocket_manager import manager as websocket_manager
+from backend.core.task_manager import task_manager
 from backend.schemas.project import (
     ProjectCreate, ProjectUpdate, ProjectResponse, ProjectListResponse, ProjectFilter,
     ProjectType, ProjectStatus
@@ -33,10 +31,6 @@ def get_processing_service(db: Session = Depends(get_db)) -> ProcessingService:
     """Dependency to get processing service."""
     return ProcessingService(db)
 
-
-def get_websocket_service():
-    """Dependency to get websocket notification service."""
-    return WebSocketNotificationService
 
 
 @router.post("/upload", response_model=ProjectResponse)
@@ -118,21 +112,18 @@ async def upload_files(
         
         # 启动异步处理任务
         try:
-            from ...tasks.import_processing import process_import_task
-            
-            # 提交异步任务
-            celery_task = process_import_task.delay(
-                project_id=project_id,
-                video_path=str(video_path),
-                srt_file_path=str(srt_path) if srt_path else None
+            from ...tasks.import_processing import run_import_task_sync
+            await task_manager.submit(
+                f"import_{project_id}",
+                run_import_task_sync,
+                project_id,
+                str(video_path),
+                str(srt_path) if srt_path else None,
             )
-            
-            logger.info(f"项目 {project_id} 异步处理任务已启动，Celery任务ID: {celery_task.id}")
-            
+            logger.info(f"项目 {project_id} 异步处理任务已提交至 TaskManager")
         except Exception as e:
             logger.error(f"启动项目 {project_id} 异步处理失败: {str(e)}")
-            # 即使异步任务启动失败，也要返回项目创建成功
-            # 用户可以通过重试按钮重新启动处理
+            # 即使任务启动失败，也返回项目创建成功，用户可通过重试按钮重新启动
         
         # 返回项目响应
         response_data = {
@@ -384,91 +375,58 @@ async def start_processing(
     project_id: str,
     project_service: ProjectService = Depends(get_project_service),
     processing_service: ProcessingService = Depends(get_processing_service),
-    websocket_service: WebSocketNotificationService = Depends(get_websocket_service)
 ):
     """Start processing a project using Celery task queue."""
     try:
-        # 获取项目信息
         project = project_service.get(project_id)
         if not project:
             raise HTTPException(status_code=404, detail="Project not found")
-        
-        # 检查项目状态
+
         if project.status.value not in ["pending", "failed"]:
             raise HTTPException(status_code=400, detail="Project is not in pending or failed status")
-        
-        # 获取视频和SRT文件路径
+
         video_path = project.video_path
         srt_path = None
-        
-        # 从processing_config中获取SRT文件路径
+
         if project.processing_config and "subtitle_path" in project.processing_config:
             srt_path = project.processing_config["subtitle_path"]
-        
-        # 验证视频文件存在
+
         if not video_path or not Path(video_path).exists():
             raise HTTPException(status_code=400, detail=f"Video file not found: {video_path}")
-        
-        # 如果没有SRT文件路径，尝试自动查找
+
         if not srt_path:
-            video_dir = Path(video_path).parent
-            srt_file = video_dir / "input.srt"
-            if srt_file.exists():
-                srt_path = str(srt_file)
-            else:
-                # SRT文件是可选的，如果没有找到，设置为None
-                srt_path = None
+            srt_file = Path(video_path).parent / "input.srt"
+            srt_path = str(srt_file) if srt_file.exists() else None
         elif not Path(srt_path).exists():
-            # 如果指定的SRT文件不存在，尝试自动查找
-            video_dir = Path(video_path).parent
-            srt_file = video_dir / "input.srt"
-            if srt_file.exists():
-                srt_path = str(srt_file)
-            else:
-                srt_path = None
-        
-        # 更新项目状态为处理中
+            srt_file = Path(video_path).parent / "input.srt"
+            srt_path = str(srt_file) if srt_file.exists() else None
+
         project_service.update_project_status(project_id, "processing")
-        
-        # 发送WebSocket通知：处理开始
-        await websocket_service.send_processing_started(
-            project_id=project_id,
-            message="开始视频处理流程"
+
+        from ...tasks.processing import _run_pipeline_sync
+        await task_manager.submit(
+            f"pipeline_{project_id}",
+            _run_pipeline_sync,
+            project_id,
+            str(video_path),
+            str(srt_path) if srt_path else None,
         )
-        
-        # 提交Celery任务
-        celery_task = process_video_pipeline.delay(
-            project_id=project_id,
-            input_video_path=str(video_path),
-            input_srt_path=str(srt_path) if srt_path else None
-        )
-        
-        # 创建处理任务记录
+
         task_result = processing_service._create_processing_task(
             project_id=project_id,
             task_type="VIDEO_PROCESSING"
         )
-        
+
         return {
             "message": "Processing started successfully",
             "project_id": project_id,
             "task_id": task_result.id,
-            "celery_task_id": celery_task.id,
             "status": "processing"
         }
-        
+
     except HTTPException:
         raise
     except Exception as e:
-        # 发送错误通知
-        try:
-            await websocket_service.send_processing_error(
-                project_id=int(project_id),
-                error=str(e),
-                step="initialization"
-            )
-        except:
-            pass
         raise HTTPException(status_code=400, detail=str(e))
 
 
@@ -477,7 +435,6 @@ async def retry_processing(
     project_id: str,
     project_service: ProjectService = Depends(get_project_service),
     processing_service: ProcessingService = Depends(get_processing_service),
-    websocket_service: WebSocketNotificationService = Depends(get_websocket_service)
 ):
     """Retry processing a project from the beginning."""
     try:
@@ -604,29 +561,18 @@ async def retry_processing(
         # 字幕文件是可选的
         srt_path_str = str(srt_path) if srt_path.exists() else None
         
-        # 提交Celery任务 - 使用字符串类型的project_id
-        celery_task = process_video_pipeline.delay(
-            project_id=project_id,
-            input_video_path=str(video_path),
-            input_srt_path=srt_path_str
+        from ...tasks.processing import _run_pipeline_sync
+        await task_manager.submit(
+            f"pipeline_{project_id}",
+            _run_pipeline_sync,
+            project_id,
+            str(video_path),
+            srt_path_str,
         )
-        
-        # 创建新的处理任务记录
-        from ...models.task import TaskType
-        task_result = processing_service._create_processing_task(
-            project_id=project_id,
-            task_type=TaskType.VIDEO_PROCESSING
-        )
-        
-        # 更新任务的Celery任务ID
-        task_result.celery_task_id = celery_task.id
-        processing_service.db.commit()
-        
+
         return {
             "message": "Processing retry started successfully",
             "project_id": project_id,
-            "task_id": task_result.id,
-            "celery_task_id": celery_task.id,
             "status": "processing"
         }
         
@@ -777,11 +723,7 @@ async def get_import_status(
         if not project:
             raise HTTPException(status_code=404, detail="Project not found")
         
-        # 检查是否有正在进行的导入任务
-        from ...core.celery_app import celery_app
-        
-        # 这里可以添加更复杂的任务状态检查逻辑
-        # 目前简单返回项目状态
+        # 返回项目导入状态
         return {
             "project_id": project_id,
             "status": project.status.value,

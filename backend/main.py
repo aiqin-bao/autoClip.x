@@ -38,36 +38,37 @@ app = FastAPI(
 # Create database tables
 @app.on_event("startup")
 async def startup_event():
-    logger.info("启动AutoClip API服务...")
-    # 导入所有模型以确保表被创建
+    logger.info("启动 AutoClip API 服务...")
     from .models.bilibili import BilibiliAccount, UploadRecord
     Base.metadata.create_all(bind=engine)
     logger.info("数据库表创建完成")
-    
-    # 加载API密钥到环境变量
+
     api_key = get_api_key()
     if api_key:
         import os
         os.environ["DASHSCOPE_API_KEY"] = api_key
-        logger.info("API密钥已加载到环境变量")
+        logger.info("API 密钥已加载")
     else:
-        logger.warning("未找到API密钥配置")
-    
-    # 启动WebSocket网关服务 - 已禁用，使用新的简化进度系统
-    # from .services.websocket_gateway_service import websocket_gateway_service
-    # await websocket_gateway_service.start()
-    # logger.info("WebSocket网关服务已启动")
-    logger.info("WebSocket网关服务已禁用，使用新的简化进度系统")
+        logger.warning("未找到 API 密钥配置")
+
+    # 启动 asyncio 任务管理器（替代 Celery Worker）
+    from .core.task_manager import task_manager  # noqa: F401
+    logger.info("TaskManager 已就绪（asyncio 内置，无需外部 Worker）")
+
+    # 启动定时任务调度器（替代 Celery beat）
+    from .core.scheduler import start_scheduler
+    start_scheduler()
+
 
 @app.on_event("shutdown")
 async def shutdown_event():
     """应用关闭事件"""
-    logger.info("正在关闭AutoClip API服务...")
-    # WebSocket网关服务已禁用
-    # from .services.websocket_gateway_service import websocket_gateway_service
-    # await websocket_gateway_service.stop()
-    # logger.info("WebSocket网关服务已停止")
-    logger.info("WebSocket网关服务已禁用")
+    logger.info("正在关闭 AutoClip API 服务...")
+    from .core.scheduler import stop_scheduler
+    stop_scheduler()
+    from .core.task_manager import task_manager
+    await task_manager.shutdown()
+    logger.info("AutoClip API 服务已关闭")
 
 # Add CORS middleware
 app.add_middleware(

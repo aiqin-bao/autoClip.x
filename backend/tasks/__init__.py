@@ -1,42 +1,19 @@
-"""
-任务模块
-包含所有异步任务定义
-"""
+"""任务模块（asyncio TaskManager 版本，已去除 Celery 依赖）"""
 
-from .processing import *
-from .video import *
-from .notification import *
-from .maintenance import *
-from .upload import *  # 添加upload任务导入
-from .data_cleanup import *  # 添加数据清理任务导入
+from .processing import _run_pipeline_sync
+from .import_processing import run_import_task_sync
+from .upload import run_upload_clip_sync
+from .notification import (
+    send_processing_notification,
+    send_error_notification,
+    send_completion_notification,
+)
 
 __all__ = [
-    # 处理任务
-    'process_video_pipeline',
-    'process_single_step',
-    'retry_processing_step',
-    
-    # 视频任务
-    'extract_video_clips',
-    'generate_video_collections',
-    'optimize_video_quality',
-    
-    # 通知任务
-    'send_processing_notification',
-    'send_error_notification',
-    'send_completion_notification',
-    
-    # 维护任务
-    'cleanup_expired_tasks',
-    'health_check',
-    'backup_project_data',
-    
-    # 数据清理任务
-    'cleanup_expired_data',
-    'check_data_consistency',
-    'cleanup_orphaned_data',
-    
-    # 投稿任务
-    'upload_clip_task',
-    'batch_upload_task'
-] 
+    "_run_pipeline_sync",
+    "run_import_task_sync",
+    "run_upload_clip_sync",
+    "send_processing_notification",
+    "send_error_notification",
+    "send_completion_notification",
+]

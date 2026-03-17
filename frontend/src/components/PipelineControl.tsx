@@ -161,8 +161,8 @@ const PipelineControl: React.FC<PipelineControlProps> = ({
     if (projectId) {
       fetchPipelineStatus();
       
-      // 每10秒刷新一次
-      const interval = setInterval(fetchPipelineStatus, 10000);
+      // 每30秒刷新一次（低优先级控制面板，SSE 驱动主要进度）
+      const interval = setInterval(fetchPipelineStatus, 30000);
       return () => clearInterval(interval);
     }
   }, [projectId]);

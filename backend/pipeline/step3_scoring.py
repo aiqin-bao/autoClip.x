@@ -47,21 +47,27 @@ class ClipScorer:
                 logger.warning(f"  > 话题 '{item.get('outline', '未知')}' 缺少 chunk_index，将被跳过。")
         
         all_scored_clips = []
-        # 2. 遍历每个块，批量处理其中的所有话题
-        for chunk_index, chunk_items in timeline_by_chunk.items():
-            logger.info(f"处理块 {chunk_index}，其中包含 {len(chunk_items)} 个话题...")
-            try:
-                # 3. 使用LLM进行批量评估
-                scored_chunk_items = self._get_llm_evaluation(chunk_items)
-                
-                if scored_chunk_items:
-                    all_scored_clips.extend(scored_chunk_items)
-                else:
-                    logger.warning(f"块 {chunk_index} 的LLM评估返回为空，跳过。")
+        # 2. 并行处理每个块（最多 3 个并发 LLM 请求，防止 API 限速）
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        _MAX_LLM_CONCURRENT = 3
 
-            except Exception as e:
-                logger.error(f"  > 处理块 {chunk_index} 进行评分时出错: {str(e)}")
-                continue
+        def _score_chunk(chunk_index_items):
+            chunk_index, chunk_items = chunk_index_items
+            logger.info(f"处理块 {chunk_index}，其中包含 {len(chunk_items)} 个话题...")
+            return chunk_index, self._get_llm_evaluation(chunk_items)
+
+        with ThreadPoolExecutor(max_workers=_MAX_LLM_CONCURRENT) as pool:
+            futures = {pool.submit(_score_chunk, item): item[0] for item in timeline_by_chunk.items()}
+            for future in as_completed(futures):
+                chunk_index = futures[future]
+                try:
+                    _, scored_chunk_items = future.result()
+                    if scored_chunk_items:
+                        all_scored_clips.extend(scored_chunk_items)
+                    else:
+                        logger.warning(f"块 {chunk_index} 的LLM评估返回为空，跳过。")
+                except Exception as e:
+                    logger.error(f"  > 处理块 {chunk_index} 进行评分时出错: {str(e)}")
 
         # 4. 按最终得分对所有结果进行排序
         if all_scored_clips:

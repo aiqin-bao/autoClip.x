@@ -77,8 +77,8 @@ const TaskProgress: React.FC<TaskProgressProps> = ({
       // 立即获取一次
       fetchTaskProgress();
       
-      // 每5秒更新一次
-      const interval = setInterval(fetchTaskProgress, 5000);
+      // 每10秒更新一次（SSE 承担主要进度通知）
+      const interval = setInterval(fetchTaskProgress, 10000);
       return () => clearInterval(interval);
     }
   }, [projectId, taskId, status]);

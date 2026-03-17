@@ -31,32 +31,17 @@ export const UnifiedStatusBar: React.FC<UnifiedStatusBarProps> = ({
   onStatusChange,
   onDownloadProgressUpdate
 }) => {
-  const { getProgress, startPolling, stopPolling } = useSimpleProgressStore()
-  const [isPolling, setIsPolling] = useState(false)
+  const { getProgress, subscribeSSE } = useSimpleProgressStore()
   const [currentDownloadProgress, setCurrentDownloadProgress] = useState(downloadProgress)
   
   const progress = getProgress(projectId)
 
-  // 根据状态决定是否轮询
+  // 处理中/待处理：使用 SSE 替代轮询
   useEffect(() => {
-    if ((status === 'processing' || status === 'pending') && !isPolling) {
-      console.log(`开始轮询处理进度: ${projectId}`)
-      startPolling([projectId], 2000)
-      setIsPolling(true)
-    } else if (status !== 'processing' && status !== 'pending' && isPolling) {
-      console.log(`停止轮询处理进度: ${projectId}`)
-      stopPolling()
-      setIsPolling(false)
-    }
-
-    return () => {
-      if (isPolling) {
-        console.log(`清理轮询: ${projectId}`)
-        stopPolling()
-        setIsPolling(false)
-      }
-    }
-  }, [status, projectId, isPolling, startPolling, stopPolling])
+    if (status !== 'processing' && status !== 'pending') return
+    const unsub = subscribeSSE(projectId)
+    return unsub
+  }, [status, projectId, subscribeSSE])
 
   // 下载进度轮询
   useEffect(() => {
@@ -91,8 +76,8 @@ export const UnifiedStatusBar: React.FC<UnifiedStatusBarProps> = ({
       // 立即获取一次
       pollDownloadProgress()
       
-      // 每2秒轮询一次
-      const interval = setInterval(pollDownloadProgress, 2000)
+      // 每5秒轮询一次（下载进度无需毫秒级实时性）
+      const interval = setInterval(pollDownloadProgress, 5000)
       
       return () => clearInterval(interval)
     }

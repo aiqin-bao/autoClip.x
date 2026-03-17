@@ -518,8 +518,19 @@ class BilibiliUploadService:
             for clip_id in clip_ids:
                 clip_id = clip_id.strip()
                 if clip_id:
-                    from ..tasks.upload import upload_clip_task
-                    upload_clip_task.delay(str(record.id), clip_id)
+                    from ..tasks.upload import run_upload_clip_sync
+                    from ..core.task_manager import task_manager
+                    import asyncio
+                    try:
+                        loop = asyncio.get_running_loop()
+                        loop.create_task(task_manager.submit(
+                            f"upload_{record.id}_{clip_id}", run_upload_clip_sync, str(record.id), clip_id
+                        ))
+                    except RuntimeError:
+                        # 不在异步上下文中，直接在线程池运行
+                        asyncio.run(task_manager.submit(
+                            f"upload_{record.id}_{clip_id}", run_upload_clip_sync, str(record.id), clip_id
+                        ))
             
             logger.info(f"投稿任务重试已启动: {record_id}")
             return True

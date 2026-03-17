@@ -16,6 +16,7 @@ import DouyinDownload from '../components/DouyinDownload'
 import { projectApi } from '../services/api'
 import { Project, useProjectStore } from '../store/useProjectStore'
 import { useProjectPolling } from '../hooks/useProjectPolling'
+import { useProjectSSE } from '../hooks/useProjectSSE'
 // import { useWebSocket, WebSocketEventMessage } from '../hooks/useWebSocket'  // 已禁用WebSocket系统
 
 const { Content } = Layout
@@ -55,13 +56,23 @@ const HomePage: React.FC = () => {
   //   onMessage: handleWebSocketMessage
   // })
 
-  // 使用项目轮询Hook
+  // 正在处理中的项目 id 列表（用于 SSE 订阅）
+  const processingIds = projects
+    .filter((p) => p.status === 'processing')
+    .map((p) => p.id)
+
+  // SSE 订阅：有项目完成时立即刷新列表
+  useProjectSSE(processingIds, () => {
+    loadProjects()
+  })
+
+  // 保底轮询：处理中时 10s/次，空闲时 30s/次（大幅降低无效请求）
   const { refreshNow } = useProjectPolling({
     onProjectsUpdate: (updatedProjects) => {
       setProjects(updatedProjects || [])
     },
     enabled: true,
-    interval: 10000 // 10秒轮询一次
+    interval: processingIds.length > 0 ? 10000 : 30000,
   })
 
   useEffect(() => {

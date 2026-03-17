@@ -72,29 +72,37 @@ class OutlineExtractor:
         self._save_srt_chunks(chunks)
         
         all_outlines = []
-        
-        # 4. 逐一处理每个文本块文件
-        for i, chunk_file in enumerate(chunk_files):
+
+        # 4. 并发处理每个文本块（最多 3 个并发 LLM 请求，防止限速）
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        _MAX_LLM_CONCURRENT = 3
+
+        def _process_chunk(idx_and_file):
+            i, chunk_file = idx_and_file
             logger.info(f"处理第{i+1}/{len(chunks)}个文本块: {chunk_file.name}")
-            try:
-                # 读取文本块内容
-                with open(chunk_file, 'r', encoding='utf-8') as f:
-                    chunk_text = f.read()
-                
-                # 为每个块调用LLM
-                input_data = {"text": chunk_text}
-                response = self.llm_client.call_with_retry(self.outline_prompt, input_data)
-                
-                if response:
-                    # 解析响应并附加块索引
-                    # 注意：这里的chunk_index直接用i，与文件名和原始chunk对应
-                    parsed_outlines = self._parse_outline_response(response, i)
-                    all_outlines.extend(parsed_outlines)
-                else:
-                    logger.warning(f"处理第{i+1}个文本块时返回空响应")
-            except Exception as e:
-                logger.error(f"处理第{i+1}个文本块失败: {e}")
-                continue
+            with open(chunk_file, 'r', encoding='utf-8') as f:
+                chunk_text = f.read()
+            response = self.llm_client.call_with_retry(self.outline_prompt, {"text": chunk_text})
+            if response:
+                return i, self._parse_outline_response(response, i)
+            logger.warning(f"处理第{i+1}个文本块时返回空响应")
+            return i, []
+
+        results_map = {}
+        with ThreadPoolExecutor(max_workers=_MAX_LLM_CONCURRENT) as pool:
+            futures = {pool.submit(_process_chunk, (i, f)): i for i, f in enumerate(chunk_files)}
+            for future in as_completed(futures):
+                i = futures[future]
+                try:
+                    idx, outlines = future.result()
+                    results_map[idx] = outlines
+                except Exception as e:
+                    logger.error(f"处理第{i+1}个文本块失败: {e}")
+                    results_map[i] = []
+
+        # 按原始顺序合并（保证 chunk_index 与文件顺序一致）
+        for i in sorted(results_map):
+            all_outlines.extend(results_map[i])
         
         # 5. 合并和去重
         final_outlines = self._merge_outlines(all_outlines)

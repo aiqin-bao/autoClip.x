@@ -2,7 +2,8 @@
 
 # AutoClip 一键启动脚本
 # 版本: 2.0
-# 功能: 启动完整的AutoClip系统（后端API + Celery Worker + 前端界面）
+# 功能: 启动完整的AutoClip系统（后端API + 前端界面）
+# 注：已移除 Redis 和 Celery Worker，使用内置 asyncio TaskManager
 
 set -euo pipefail
 
@@ -166,7 +167,7 @@ check_environment() {
     fi
     
     # 检查必要的命令
-    local required_commands=("python3" "node" "npm" "redis-cli")
+    local required_commands=("python3" "node" "npm")
     for cmd in "${required_commands[@]}"; do
         if command_exists "$cmd"; then
             log_success "$cmd 已安装"
@@ -271,7 +272,6 @@ setup_environment() {
                 cat > .env << EOF
 # AutoClip 环境配置
 DATABASE_URL=sqlite:///./data/autoclip.db
-REDIS_URL=redis://localhost:6379/0
 API_DASHSCOPE_API_KEY=
 API_MODEL_NAME=qwen-plus
 LOG_LEVEL=INFO
@@ -285,7 +285,7 @@ EOF
     
     # 检查Python依赖
     log_info "检查 Python 依赖..."
-    if ! python -c "import fastapi, celery, sqlalchemy" 2>/dev/null; then
+    if ! python -c "import fastapi, sqlalchemy" 2>/dev/null; then
         log_warning "缺少依赖，正在安装..."
         pip install -r requirements.txt
     fi
@@ -452,23 +452,6 @@ health_check() {
         all_healthy=false
     fi
     
-    # 检查Redis
-    log_info "检查 Redis 服务..."
-    if redis-cli ping >/dev/null 2>&1; then
-        log_success "Redis 服务健康"
-    else
-        log_error "Redis 服务不健康"
-        all_healthy=false
-    fi
-    
-    # 检查Celery Worker
-    log_info "检查 Celery Worker..."
-    if pgrep -f "celery.*worker" >/dev/null; then
-        log_success "Celery Worker 健康"
-    else
-        log_error "Celery Worker 不健康"
-        all_healthy=false
-    fi
     
     if [[ "$all_healthy" == true ]]; then
         log_success "所有服务健康检查通过"
@@ -488,10 +471,8 @@ cleanup() {
     
     stop_process "$BACKEND_PID_FILE" "后端服务"
     stop_process "$FRONTEND_PID_FILE" "前端服务"
-    stop_process "$CELERY_PID_FILE" "Celery Worker"
     
     # 停止所有相关进程
-    pkill -f "celery.*worker" 2>/dev/null || true
     pkill -f "uvicorn.*backend.main:app" 2>/dev/null || true
     pkill -f "npm.*dev" 2>/dev/null || true
     
@@ -516,7 +497,6 @@ show_system_info() {
     echo -e "${CYAN}📝 日志文件:${NC}"
     echo -e "  后端日志: tail -f $BACKEND_LOG"
     echo -e "  前端日志: tail -f $FRONTEND_LOG"
-    echo -e "  Celery日志: tail -f $CELERY_LOG"
     echo ""
     echo -e "${CYAN}🛑 停止系统:${NC}"
     echo -e "  ./stop_autoclip.sh 或按 Ctrl+C"
@@ -546,10 +526,8 @@ main() {
     check_environment
     
     # 启动服务
-    start_redis
     setup_environment
     init_database
-    start_celery
     start_backend
     start_frontend
     

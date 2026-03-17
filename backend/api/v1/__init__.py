@@ -28,7 +28,7 @@ from .progress import router as progress_router
 from .pipeline_control import router as pipeline_control_router
 from .debug import router as debug_router
 from .simple_progress import router as simple_progress_router
-from ..upload_queue import router as upload_queue_router
+from .sse_progress import router as sse_progress_router
 from ..account_health import router as account_health_router
 
 # 注册所有路由
@@ -51,7 +51,7 @@ api_router.include_router(progress_router, prefix="/progress", tags=["progress"]
 api_router.include_router(pipeline_control_router, prefix="/pipeline", tags=["pipeline"])
 api_router.include_router(debug_router, tags=["debug"])
 api_router.include_router(simple_progress_router, tags=["simple-progress"])
-api_router.include_router(upload_queue_router, tags=["upload-queue"])
+api_router.include_router(sse_progress_router, prefix="/sse-progress", tags=["sse-progress"])
 api_router.include_router(account_health_router, tags=["account-health"])
 
 __all__ = ["api_router"]

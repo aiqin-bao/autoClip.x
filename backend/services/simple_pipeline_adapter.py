@@ -6,7 +6,13 @@ import logging
 from typing import Dict, Any, Optional, Callable
 from pathlib import Path
 
-from backend.services.simple_progress import emit_progress, clear_progress
+from backend.core.progress_store import progress_store as _ps
+
+def emit_progress(project_id: str, stage: str, message: str = "", subpercent=None):
+    _ps.emit(project_id, stage, message, subpercent)
+
+def clear_progress(project_id: str):
+    _ps.clear(project_id)
 from backend.pipeline.step1_outline import run_step1_outline
 from backend.pipeline.step2_timeline import run_step2_timeline
 from backend.pipeline.step3_scoring import run_step3_scoring
@@ -39,7 +45,6 @@ class SimplePipelineAdapter:
             logger.info(f"开始为视频 {video_path} 自动生成字幕")
             
             # 更新进度
-            from backend.services.simple_progress import emit_progress
             emit_progress(self.project_id, "SUBTITLE", "正在使用AI生成字幕...", subpercent=25)
             
             # 尝试使用bcut-asr

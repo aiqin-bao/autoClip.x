@@ -5,10 +5,11 @@
 
 from fastapi import APIRouter, HTTPException, Depends
 from sqlalchemy.orm import Session
-from typing import List, Dict, Any
+from typing import Dict, Any
 from ...core.database import get_db
 from ...models.task import Task, TaskStatus
-from ...services.progress_update_service import progress_update_service
+from ...core.progress_store import progress_store
+from ...core.task_manager import task_manager
 from datetime import datetime
 
 router = APIRouter()
@@ -22,31 +23,29 @@ async def get_task_progress(task_id: str, db: Session = Depends(get_db)):
         if not task:
             raise HTTPException(status_code=404, detail="Task not found")
         
-        # 获取实时进度信息
-        realtime_progress = progress_update_service.get_task_progress(task_id)
-        
+        # 从 ProgressStore 获取实时进度
+        snapshot = progress_store.get_snapshot(str(task.project_id))
+
         response = {
             'id': task.id,
             'project_id': task.project_id,
             'name': task.name,
             'status': task.status,
-            'progress': task.progress,
+            'progress': snapshot['percent'] if snapshot else task.progress,
             'current_step': task.current_step,
             'created_at': task.created_at.isoformat() if task.created_at else None,
             'started_at': task.started_at.isoformat() if task.started_at else None,
             'completed_at': task.completed_at.isoformat() if task.completed_at else None,
-            'updated_at': task.updated_at.isoformat() if task.updated_at else None
+            'updated_at': task.updated_at.isoformat() if task.updated_at else None,
         }
-        
-        # 如果有实时进度信息，合并进去
-        if realtime_progress:
+
+        if snapshot:
             response.update({
-                'realtime_progress': realtime_progress['progress'],
-                'realtime_step': realtime_progress['current_step'],
-                'step_details': realtime_progress.get('step_details'),
-                'last_update': realtime_progress['updated_at'].isoformat()
+                'realtime_stage': snapshot.get('stage'),
+                'realtime_message': snapshot.get('message'),
+                'realtime_percent': snapshot.get('percent'),
             })
-        
+
         return response
         
     except HTTPException:
@@ -63,30 +62,27 @@ async def get_project_tasks_progress(project_id: str, db: Session = Depends(get_
         
         tasks_progress = []
         for task in tasks:
-            # 获取实时进度信息
-            realtime_progress = progress_update_service.get_task_progress(task.id)
-            
+            snapshot = progress_store.get_snapshot(str(task.project_id))
+
             task_info = {
                 'id': task.id,
                 'name': task.name,
                 'status': task.status,
-                'progress': task.progress,
+                'progress': snapshot['percent'] if snapshot else task.progress,
                 'current_step': task.current_step,
                 'created_at': task.created_at.isoformat() if task.created_at else None,
                 'started_at': task.started_at.isoformat() if task.started_at else None,
                 'completed_at': task.completed_at.isoformat() if task.completed_at else None,
-                'updated_at': task.updated_at.isoformat() if task.updated_at else None
+                'updated_at': task.updated_at.isoformat() if task.updated_at else None,
             }
-            
-            # 如果有实时进度信息，合并进去
-            if realtime_progress:
+
+            if snapshot:
                 task_info.update({
-                    'realtime_progress': realtime_progress['progress'],
-                    'realtime_step': realtime_progress['current_step'],
-                    'step_details': realtime_progress.get('step_details'),
-                    'last_update': realtime_progress['updated_at'].isoformat()
+                    'realtime_stage': snapshot.get('stage'),
+                    'realtime_message': snapshot.get('message'),
+                    'realtime_percent': snapshot.get('percent'),
                 })
-            
+
             tasks_progress.append(task_info)
         
         return {
@@ -103,27 +99,34 @@ async def get_project_tasks_progress(project_id: str, db: Session = Depends(get_
 
 @router.get("/active")
 async def get_active_tasks():
-    """获取所有活动任务的进度"""
+    """获取所有活动任务的进度（从 TaskManager 读取运行中任务）"""
     try:
-        active_tasks = progress_update_service.get_all_active_tasks()
-        
-        # 转换为前端友好的格式
-        formatted_tasks = []
-        for task_id, progress_info in active_tasks.items():
-            formatted_tasks.append({
-                'task_id': task_id,
-                'progress': progress_info['progress'],
-                'current_step': progress_info['current_step'],
-                'step_details': progress_info.get('step_details'),
-                'started_at': progress_info['started_at'].isoformat() if progress_info['started_at'] else None,
-                'updated_at': progress_info['updated_at'].isoformat() if progress_info['updated_at'] else None
-            })
-        
+        running_ids = list(task_manager._running_tasks.keys())
+        snapshots = {}
+        for tid in running_ids:
+            # task_id 格式通常是 "pipeline_{project_id}"
+            project_id = tid.replace("pipeline_", "", 1)
+            snap = progress_store.get_snapshot(project_id)
+            if snap:
+                snapshots[tid] = snap
+
+        formatted_tasks = [
+            {
+                'task_id': tid,
+                'project_id': snap.get('project_id'),
+                'stage': snap.get('stage'),
+                'stage_name': snap.get('stage_name'),
+                'percent': snap.get('percent'),
+                'message': snap.get('message'),
+            }
+            for tid, snap in snapshots.items()
+        ]
+
         return {
             'active_tasks': formatted_tasks,
-            'total_active': len(formatted_tasks)
+            'total_active': task_manager.running_count(),
         }
-        
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
@@ -138,19 +141,16 @@ async def get_progress_summary(db: Session = Depends(get_db)):
         failed_tasks = db.query(Task).filter(Task.status == TaskStatus.FAILED).count()
         pending_tasks = db.query(Task).filter(Task.status == TaskStatus.PENDING).count()
         
-        # 获取活动任务的实时进度
-        active_tasks = progress_update_service.get_all_active_tasks()
-        
         return {
             'summary': {
                 'total_tasks': total_tasks,
                 'running_tasks': running_tasks,
                 'completed_tasks': completed_tasks,
                 'failed_tasks': failed_tasks,
-                'pending_tasks': pending_tasks
+                'pending_tasks': pending_tasks,
             },
-            'active_tasks_count': len(active_tasks),
-            'timestamp': datetime.utcnow().isoformat()
+            'active_tasks_count': task_manager.running_count(),
+            'timestamp': datetime.utcnow().isoformat(),
         }
         
     except Exception as e:

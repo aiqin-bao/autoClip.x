@@ -348,43 +348,55 @@ class VideoProcessor:
     
     def batch_extract_clips(self, input_video: Path, clips_data: List[Dict]) -> List[Path]:
         """
-        批量提取视频片段
+        批量提取视频片段（并行版本：ThreadPoolExecutor，最多 4 个并发 ffmpeg 进程）
         
         Args:
             input_video: 输入视频路径
             clips_data: 片段数据列表，每个元素包含id、title、start_time、end_time
             
         Returns:
-            成功提取的片段路径列表
+            成功提取的片段路径列表（顺序与输入一致）
         """
-        successful_clips = []
-        
-        for clip_data in clips_data:
+        import os
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        MAX_WORKERS = min(4, os.cpu_count() or 2)
+
+        def _extract_one(clip_data: Dict):
             clip_id = clip_data['id']
             title = clip_data.get('title', f"片段_{clip_id}")
             start_time = clip_data['start_time']
             end_time = clip_data['end_time']
-            
-            # 处理时间格式 - 如果是秒数，转换为SRT格式
+
             if isinstance(start_time, (int, float)):
                 start_time = VideoProcessor.convert_seconds_to_ffmpeg_time(start_time)
             if isinstance(end_time, (int, float)):
                 end_time = VideoProcessor.convert_seconds_to_ffmpeg_time(end_time)
-            
-            # 使用标题作为文件名，并清理不合法的字符
-            # 在文件名中包含clip_id，便于后续合集拼接时查找
+
             safe_title = VideoProcessor.sanitize_filename(title)
             output_path = self.clips_dir / f"{clip_id}_{safe_title}.mp4"
-            
-            logger.info(f"提取切片 {clip_id}: {start_time} -> {end_time}, 输出: {output_path}")
-            
-            if VideoProcessor.extract_clip(input_video, output_path, start_time, end_time):
-                successful_clips.append(output_path)
-                logger.info(f"切片 {clip_id} 提取成功")
-            else:
-                logger.error(f"切片 {clip_id} 提取失败")
-        
-        return successful_clips
+
+            logger.info(f"提取切片 {clip_id}: {start_time} -> {end_time}")
+            ok = VideoProcessor.extract_clip(input_video, output_path, start_time, end_time)
+            return output_path if ok else None
+
+        results_map: Dict[int, Path] = {}
+        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
+            futures = {pool.submit(_extract_one, cd): i for i, cd in enumerate(clips_data)}
+            for future in as_completed(futures):
+                idx = futures[future]
+                try:
+                    path = future.result()
+                    if path:
+                        results_map[idx] = path
+                        logger.info(f"切片 {clips_data[idx]['id']} 提取成功")
+                    else:
+                        logger.error(f"切片 {clips_data[idx]['id']} 提取失败")
+                except Exception as e:
+                    logger.error(f"切片 {clips_data[idx]['id']} 异常: {e}")
+
+        # 按原始顺序返回成功的切片
+        return [results_map[i] for i in sorted(results_map)]
     
     def create_collections_from_metadata(self, collections_data: List[Dict]) -> List[Path]:
         """

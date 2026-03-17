@@ -181,36 +181,51 @@ async def retry_processing_only(
     project_id: str,
     db: Session = Depends(get_db)
 ) -> Dict[str, Any]:
-    """仅重试处理"""
+    """仅重试处理（直接使用 task_manager，不依赖 ProcessingService.start_processing）"""
     try:
-        # 使用现有的处理服务
-        processing_service = ProcessingService(db)
-        
+        from ...core.task_manager import task_manager
+        from ...tasks.processing import _run_pipeline_sync
+        from datetime import datetime
+
         # 获取项目信息
         project = db.query(Project).filter(Project.id == project_id).first()
         if not project:
             raise HTTPException(status_code=404, detail="项目不存在")
-        
+
         # 检查视频文件
         if not project.video_path or not Path(project.video_path).exists():
             raise HTTPException(status_code=400, detail="视频文件不存在，请先重试下载")
-        
+
+        video_path = project.video_path
+        srt_candidate = Path(video_path).parent / "input.srt"
+        srt_path = str(srt_candidate) if srt_candidate.exists() else None
+
         # 重置项目状态
         project.status = ProjectStatus.PENDING
+        project.updated_at = datetime.utcnow()
         db.commit()
-        
-        # 启动处理任务
-        result = processing_service.start_processing(
-            project_id=project_id,
-            srt_path=Path(project.video_path).parent / "input.srt" if (project.video_path and Path(project.video_path).parent / "input.srt").exists() else None
+
+        # 创建任务记录（审计用途）
+        processing_service = ProcessingService(db)
+        task = processing_service._create_processing_task(project_id)
+
+        # 提交到 asyncio TaskManager
+        await task_manager.submit(
+            f"pipeline_{project_id}",
+            _run_pipeline_sync,
+            project_id,
+            video_path,
+            srt_path,
         )
-        
+
         return {
             "success": True,
             "message": "处理重试已启动",
-            "task_id": result.get("task_id")
+            "task_id": str(task.id),
         }
-    
+
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"重试处理失败: {e}")
         raise HTTPException(status_code=500, detail=f"重试处理失败: {str(e)}")

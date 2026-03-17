@@ -49,61 +49,58 @@ class TitleGenerator:
             clips_by_chunk[clip.get('chunk_index', 0)].append(clip)
             
         all_clips_with_titles = []
-        for chunk_index, chunk_clips in clips_by_chunk.items():
+        # 并行处理每个 chunk（最多 3 个并发 LLM 请求）
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        _MAX_LLM_CONCURRENT = 3
+
+        def _generate_titles_for_chunk(chunk_index_clips):
+            chunk_index, chunk_clips = chunk_index_clips
             logger.info(f"处理块 {chunk_index}，其中包含 {len(chunk_clips)} 个片段...")
-            
             try:
-                logger.info(f"  > 开始调用API生成标题...")
                 input_for_llm = [
                     {
                         "id": clip.get('id'),
-                        "title": clip.get('outline'),  # 使用outline字段作为title
+                        "title": clip.get('outline'),
                         "content": clip.get('content'),
-                        "recommend_reason": clip.get('recommend_reason')
-                    } for clip in chunk_clips
+                        "recommend_reason": clip.get('recommend_reason'),
+                    }
+                    for clip in chunk_clips
                 ]
-                
                 raw_response = self.llm_client.call_with_retry(self.title_prompt, input_for_llm)
-                
                 if raw_response:
-                    # 保存LLM原始响应用于调试（但不用作缓存）
                     llm_cache_path = self.llm_raw_output_dir / f"chunk_{chunk_index}.txt"
                     with open(llm_cache_path, 'w', encoding='utf-8') as f:
                         f.write(raw_response)
-                    logger.info(f"  > LLM原始响应已保存到 {llm_cache_path}")
                     titles_map = self.llm_client.parse_json_response(raw_response)
                 else:
                     titles_map = {}
-                
+
                 if not isinstance(titles_map, dict):
-                    logger.warning(f"  > LLM返回的标题不是一个字典: {titles_map}，跳过该块。")
-                    # 即使失败，也把原始片段加回去，避免数据丢失
-                    all_clips_with_titles.extend(chunk_clips)
-                    continue
+                    logger.warning(f"  > LLM返回的标题不是字典: {titles_map}，使用原始数据。")
+                    return chunk_clips
 
                 for clip in chunk_clips:
                     clip_id = clip.get('id')
                     generated_title = titles_map.get(clip_id)
                     if generated_title and isinstance(generated_title, str):
                         clip['generated_title'] = generated_title
-                        # 安全地获取outline标题用于日志显示
-                        outline = clip.get('outline', {})
-                        if isinstance(outline, dict):
-                            title = outline.get('title', '未知标题')
-                        else:
-                            title = str(outline)
-                        logger.info(f"  > 为片段 {clip_id} ('{title[:20]}...') 生成标题: {generated_title}")
                     else:
-                        clip['generated_title'] = clip.get('outline', f"片段_{clip_id}")  # 使用outline作为fallback
-                        logger.warning(f"  > 未能为片段 {clip_id} 找到或解析标题，使用原始outline")
-                
-                all_clips_with_titles.extend(chunk_clips)
-
+                        clip['generated_title'] = clip.get('outline', f"片段_{clip_id}")
+                return chunk_clips
             except Exception as e:
                 logger.error(f"  > 为块 {chunk_index} 生成标题时出错: {e}")
-                # 即使出错，也添加原始数据以防丢失
-                all_clips_with_titles.extend(chunk_clips)
-                continue
+                return chunk_clips  # fallback: 返回原始数据
+
+        with ThreadPoolExecutor(max_workers=_MAX_LLM_CONCURRENT) as pool:
+            futures = {pool.submit(_generate_titles_for_chunk, item): item[0]
+                       for item in clips_by_chunk.items()}
+            for future in as_completed(futures):
+                chunk_index = futures[future]
+                try:
+                    clips = future.result()
+                    all_clips_with_titles.extend(clips)
+                except Exception as e:
+                    logger.error(f"  > 块 {chunk_index} 任务异常: {e}")
                 
         logger.info("所有高分片段标题生成完成")
         return all_clips_with_titles

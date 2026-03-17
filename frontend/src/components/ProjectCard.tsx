@@ -57,20 +57,11 @@ interface ProjectCardProps {
   onClick?: () => void
 }
 
-interface LogEntry {
-  timestamp: string
-  module: string
-  level: string
-  message: string
-}
-
 const ProjectCard: React.FC<ProjectCardProps> = ({ project, onDelete, onRetry, onClick }) => {
   const navigate = useNavigate()
   const [videoThumbnail, setVideoThumbnail] = useState<string | null>(null)
   const [thumbnailLoading, setThumbnailLoading] = useState(false)
   const [isRetrying, setIsRetrying] = useState(false)
-  const [logs, setLogs] = useState<LogEntry[]>([])
-  const [currentLogIndex, setCurrentLogIndex] = useState(0)
 
   // 获取分类信息
   const getCategoryInfo = (category?: string) => {
@@ -228,47 +219,6 @@ const ProjectCard: React.FC<ProjectCardProps> = ({ project, onDelete, onRetry, o
     generateThumbnail()
   }, [project.id, project.video_path, thumbnailCacheKey])
 
-  // 获取项目日志（仅在处理中时）
-  useEffect(() => {
-    if (project.status !== 'processing') {
-      setLogs([])
-      return
-    }
-
-    const fetchLogs = async () => {
-      try {
-        const response = await projectApi.getProjectLogs(project.id, 20)
-        setLogs(response.logs.filter(log => 
-          log.message.includes('Step') || 
-          log.message.includes('开始') || 
-          log.message.includes('完成') ||
-          log.message.includes('处理') ||
-          log.level === 'ERROR'
-        ))
-      } catch (error) {
-        console.error('获取日志失败:', error)
-      }
-    }
-
-    // 立即获取一次
-    fetchLogs()
-    
-    // 每3秒更新一次日志
-    const logInterval = setInterval(fetchLogs, 3000)
-    
-    return () => clearInterval(logInterval)
-  }, [project.id, project.status])
-
-  // 日志轮播
-  useEffect(() => {
-    if (logs.length <= 1) return
-    
-    const interval = setInterval(() => {
-      setCurrentLogIndex(prev => (prev + 1) % logs.length)
-    }, 2000) // 每2秒切换一条日志
-    
-    return () => clearInterval(interval)
-  }, [logs.length])
 
   const getStatusColor = (status: Project['status']) => {
     switch (status) {

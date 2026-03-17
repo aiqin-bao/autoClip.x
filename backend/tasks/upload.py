@@ -6,7 +6,7 @@ import logging
 from pathlib import Path
 from sqlalchemy.orm import Session
 
-from ..core.celery_app import celery_app
+
 from ..core.database import SessionLocal
 from ..services.bilibili_service import BilibiliUploadService
 from ..core.path_utils import get_project_output_directory
@@ -14,8 +14,8 @@ from ..core.path_utils import get_project_output_directory
 logger = logging.getLogger(__name__)
 
 
-@celery_app.task(bind=True, name='backend.tasks.upload.upload_clip_task')
-def upload_clip_task(self, record_id: str, clip_id: str):
+
+def upload_clip_task(record_id: str, clip_id: str):
     """上传切片任务"""
     db = SessionLocal()
     try:
@@ -133,8 +133,8 @@ def upload_clip_task(self, record_id: str, clip_id: str):
         db.close()
 
 
-@celery_app.task(bind=True, name='backend.tasks.upload.upload_project_task')
-def upload_project_task(self, record_id: str, clip_ids: list):
+
+def upload_project_task(record_id: str, clip_ids: list):
     """上传项目任务"""
     db = SessionLocal()
     try:
@@ -197,6 +197,45 @@ def upload_project_task(self, record_id: str, clip_ids: list):
     except Exception as e:
         logger.error(f"上传项目任务失败: {str(e)}")
         upload_service.update_upload_status(record_id_int, "failed", str(e))
+        raise
+    finally:
+        db.close()
+
+def run_upload_clip_sync(record_id: str, clip_id: str):
+    """同步入口，供 TaskManager 调用（替代 upload_clip_task.delay()）"""
+    db = SessionLocal()
+    try:
+        upload_service = BilibiliUploadService(db)
+        try:
+            record_id_int = int(record_id)
+        except ValueError:
+            raise ValueError(f"无效的 record_id: {record_id}")
+
+        from ..models.clip import Clip
+        clip = db.query(Clip).filter(Clip.id == clip_id).first()
+        if not clip:
+            raise ValueError(f"切片不存在: {clip_id}")
+
+        project_output_dir = get_project_output_directory(str(clip.project_id))
+        import glob as _glob
+        patterns = [
+            str(project_output_dir / "clips" / f"{clip_id}*.mp4"),
+            str(project_output_dir / "clips" / f"*{clip_id}*.mp4"),
+        ]
+        video_path = None
+        for p in patterns:
+            matches = _glob.glob(p)
+            if matches:
+                video_path = matches[0]
+                break
+
+        if not video_path:
+            raise FileNotFoundError(f"找不到切片视频文件: {clip_id}")
+
+        upload_service.upload_clip(record_id_int, clip_id, video_path)
+        logger.info(f"[run_upload_clip_sync] 上传完成: {clip_id}")
+    except Exception as e:
+        logger.error(f"[run_upload_clip_sync] 失败: {e}")
         raise
     finally:
         db.close()

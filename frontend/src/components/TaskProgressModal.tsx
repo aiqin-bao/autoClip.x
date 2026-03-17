@@ -79,8 +79,8 @@ const TaskProgressModal: React.FC<TaskProgressModalProps> = ({
     // 立即检查一次状态
     checkStatus()
     
-    // 如果任务还在进行中，定期检查状态
-    const interval = setInterval(checkStatus, 2000)
+    // 如果任务还在进行中，定期检查状态（降至 5s，主要进度由 SSE 驱动）
+    const interval = setInterval(checkStatus, 5000)
     
     return () => clearInterval(interval)
   }, [visible, projectId, updateProject, onComplete])

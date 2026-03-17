@@ -30,7 +30,7 @@ from ...schemas.bilibili import (
     QRLoginResponse
 )
 from ...services.bilibili_service import BilibiliAccountService, BilibiliUploadService
-from ...tasks.upload import upload_clip_task
+from ...core.task_manager import task_manager
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/upload", tags=["投稿管理"])
@@ -361,7 +361,8 @@ async def create_upload_task(
         
         # 启动异步上传任务
         for clip_id in upload_data.clip_ids:
-            upload_clip_task.delay(str(record.id), clip_id)
+            from ...tasks.upload import run_upload_clip_sync
+            await task_manager.submit(f"upload_{record.id}_{clip_id}", run_upload_clip_sync, str(record.id), clip_id)
         
         return {
             "message": "投稿任务创建成功",

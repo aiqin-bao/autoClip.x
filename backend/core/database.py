@@ -4,9 +4,9 @@
 """
 
 import os
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event, text
 from sqlalchemy.orm import sessionmaker, Session
-from sqlalchemy.pool import StaticPool
+from sqlalchemy.pool import StaticPool, NullPool
 from typing import Generator
 from backend.models.base import Base
 
@@ -27,17 +27,25 @@ if DATABASE_URL == "sqlite:///autoclip.db":
 
 # 创建数据库引擎
 if "sqlite" in DATABASE_URL:
-    # SQLite配置
+    # SQLite 配置：开启 WAL 模式以支持并发读写
     engine = create_engine(
         DATABASE_URL,
         connect_args={
             "check_same_thread": False,
-            "timeout": 30
+            "timeout": 30,
         },
-        poolclass=StaticPool,
-        pool_pre_ping=True,
-        echo=False  # 设置为True可以看到SQL语句
+        poolclass=NullPool,  # NullPool + WAL 模式更适合多线程并发
+        echo=False,
     )
+
+    @event.listens_for(engine, "connect")
+    def _set_sqlite_pragmas(dbapi_conn, _connection_record):
+        cursor = dbapi_conn.cursor()
+        cursor.execute("PRAGMA journal_mode=WAL")   # 并发读写
+        cursor.execute("PRAGMA synchronous=NORMAL") # 性能/安全均衡
+        cursor.execute("PRAGMA busy_timeout=10000") # 等待最多 10s
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.close()
 else:
     # PostgreSQL配置
     engine = create_engine(
@@ -77,8 +85,6 @@ def reset_database():
     """重置数据库"""
     drop_tables()
     create_tables()
-
-from sqlalchemy import text
 
 def test_connection() -> bool:
     """测试数据库连接"""

@@ -30,25 +30,26 @@ export const SimpleProgressBar: React.FC<SimpleProgressBarProps> = ({
   showDetails = true,
   onProgressUpdate
 }) => {
-  const { 
-    getProgress, 
-    startPolling, 
-    stopPolling, 
-    isPolling 
-  } = useSimpleProgressStore()
+  const { getProgress, subscribeSSE, startPolling, stopPolling } = useSimpleProgressStore()
 
   const progress = getProgress(projectId)
 
-  // 自动开始轮询
+  // 优先使用 SSE 实时推送，SSE 不可用时降级到轮询
   useEffect(() => {
-    if (autoStart && projectId) {
-      startPolling([projectId], pollingInterval)
-      
-      return () => {
-        stopPolling()
-      }
+    if (!autoStart || !projectId) return
+
+    // 尝试 SSE
+    const unsubscribe = subscribeSSE(projectId)
+
+    // SSE 同时保留一次性快照拉取（确保断线重连前有初始数据）
+    startPolling([projectId], pollingInterval)
+
+    return () => {
+      unsubscribe()
+      stopPolling()
     }
-  }, [projectId, autoStart, pollingInterval, startPolling, stopPolling])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId, autoStart])
 
   // 通知父组件进度更新
   useEffect(() => {
@@ -146,25 +147,23 @@ export const BatchProgressBar: React.FC<BatchProgressBarProps> = ({
   showDetails = true,
   onProgressUpdate
 }) => {
-  const { 
-    getAllProgress, 
-    startPolling, 
-    stopPolling, 
-    isPolling 
-  } = useSimpleProgressStore()
+  const { getAllProgress, subscribeSSE, startPolling, stopPolling } = useSimpleProgressStore()
 
   const allProgress = getAllProgress()
 
-  // 自动开始轮询
+  // 每个项目独立 SSE，同时保留批量快照轮询作为补充
   useEffect(() => {
-    if (autoStart && projectIds.length > 0) {
-      startPolling(projectIds, pollingInterval)
-      
-      return () => {
-        stopPolling()
-      }
+    if (!autoStart || projectIds.length === 0) return
+
+    const unsubs = projectIds.map((id) => subscribeSSE(id))
+    startPolling(projectIds, pollingInterval)
+
+    return () => {
+      unsubs.forEach((fn) => fn())
+      stopPolling()
     }
-  }, [projectIds, autoStart, pollingInterval, startPolling, stopPolling])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [JSON.stringify(projectIds), autoStart])
 
   // 通知父组件进度更新
   useEffect(() => {

@@ -7,7 +7,6 @@ from datetime import datetime
 from ..core.database import get_db
 from ..models.bilibili import BilibiliAccount
 from ..services.account_health_service import health_service, AccountHealthStatus
-from ..services.account_health_service import check_account_health_task, check_all_accounts_health_task, auto_refresh_cookies_task
 
 router = APIRouter()
 
@@ -246,9 +245,7 @@ async def refresh_account_cookie(
         
         if request.auto_refresh:
             # 异步执行自动刷新
-            background_tasks.add_task(
-                lambda: auto_refresh_cookies_task.delay(request.account_id)
-            )
+            background_tasks.add_task(health_service.auto_refresh_cookies, request.account_id)
             
             return CookieRefreshResponse(
                 success=True,
@@ -280,22 +277,15 @@ async def schedule_health_check(
     """调度健康检查任务"""
     try:
         if account_ids:
-            # 调度指定账号的检查任务
             for account_id in account_ids:
-                background_tasks.add_task(
-                    lambda aid=account_id: check_account_health_task.delay(aid)
-                )
-            
+                background_tasks.add_task(health_service.check_account_health, account_id)
             return {
                 "success": True,
                 "message": f"已调度 {len(account_ids)} 个账号的健康检查任务",
                 "account_count": len(account_ids)
             }
         else:
-            # 调度所有账号的检查任务
-            background_tasks.add_task(
-                lambda: check_all_accounts_health_task.delay()
-            )
+            background_tasks.add_task(health_service.check_all_accounts)
             
             return {
                 "success": True,

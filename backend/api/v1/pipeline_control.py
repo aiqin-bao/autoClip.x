@@ -10,7 +10,7 @@ from ...core.database import get_db
 from ...models.project import Project, ProjectStatus
 from ...models.task import Task, TaskStatus
 from ...services.auto_pipeline_service import auto_pipeline_service
-from ...services.progress_update_service import progress_update_service
+from ...core.progress_store import progress_store
 import asyncio
 from datetime import datetime
 import logging
@@ -89,15 +89,6 @@ async def stop_pipeline(project_id: str, db: Session = Depends(get_db)):
             task.status = TaskStatus.CANCELLED
             task.updated_at = datetime.utcnow()
             
-            # 通过进度更新服务通知任务停止
-            try:
-                await progress_update_service.complete_task(
-                    task_id=task.id,
-                    error="任务被手动停止"
-                )
-            except Exception as e:
-                logger.warning(f"通知任务停止失败: {e}")
-            
             stopped_count += 1
         
         # 更新项目状态
@@ -162,27 +153,27 @@ async def get_pipeline_status(project_id: str, db: Session = Depends(get_db)):
         # 获取实时进度信息
         task_statuses = []
         for task in tasks:
-            realtime_progress = progress_update_service.get_task_progress(task.id)
-            
+            snapshot = progress_store.get_snapshot(str(task.project_id))
+
             task_info = {
                 'id': task.id,
                 'name': task.name,
                 'status': task.status,
-                'progress': task.progress,
+                'progress': snapshot['percent'] if snapshot else task.progress,
                 'current_step': task.current_step,
                 'created_at': task.created_at.isoformat() if task.created_at else None,
                 'started_at': task.started_at.isoformat() if task.started_at else None,
                 'completed_at': task.completed_at.isoformat() if task.completed_at else None,
-                'updated_at': task.updated_at.isoformat() if task.updated_at else None
+                'updated_at': task.updated_at.isoformat() if task.updated_at else None,
             }
-            
-            if realtime_progress:
+
+            if snapshot:
                 task_info.update({
-                    'realtime_progress': realtime_progress['progress'],
-                    'realtime_step': realtime_progress['current_step'],
-                    'step_details': realtime_progress.get('step_details')
+                    'realtime_stage': snapshot.get('stage'),
+                    'realtime_message': snapshot.get('message'),
+                    'realtime_percent': snapshot.get('percent'),
                 })
-            
+
             task_statuses.append(task_info)
         
         return {

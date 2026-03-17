@@ -8,7 +8,6 @@ from sqlalchemy import select
 from ..core.database import get_db
 from ..models.bilibili import BilibiliAccount
 from ..utils.crypto import decrypt_data, encrypt_data
-from ..core.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
 
@@ -364,52 +363,3 @@ class AccountHealthService:
 
 # 全局服务实例
 health_service = AccountHealthService()
-
-# Celery任务
-@celery_app.task(name="check_account_health")
-def check_account_health_task(account_id: int):
-    """检查账号健康状态的Celery任务"""
-    import asyncio
-    
-    async def run_check():
-        return await health_service.check_account_health(account_id)
-    
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    try:
-        result = loop.run_until_complete(run_check())
-        return result
-    finally:
-        loop.close()
-
-@celery_app.task(name="check_all_accounts_health")
-def check_all_accounts_health_task():
-    """批量检查所有账号健康状态的Celery任务"""
-    import asyncio
-    
-    async def run_check():
-        return await health_service.check_all_accounts()
-    
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    try:
-        result = loop.run_until_complete(run_check())
-        return result
-    finally:
-        loop.close()
-
-@celery_app.task(name="auto_refresh_cookies")
-def auto_refresh_cookies_task(account_id: int):
-    """自动刷新Cookie的Celery任务"""
-    import asyncio
-    
-    async def run_refresh():
-        return await health_service.auto_refresh_cookies(account_id)
-    
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    try:
-        result = loop.run_until_complete(run_refresh())
-        return result
-    finally:
-        loop.close()
