@@ -155,10 +155,32 @@ export const projectApi = {
   },
 
   // 获取所有项目
-  getProjects: async (): Promise<Project[]> => {
-    const response = await api.get('/projects/')
-    // 处理分页响应结构，返回items数组
-    return (response as any).items || response || []
+  getProjects: async (params?: {
+    page?: number
+    size?: number
+    status?: string
+    project_type?: string
+    search?: string
+  }): Promise<{ 
+    items: Project[]
+    pagination: {
+      page: number
+      size: number
+      total: number
+      pages: number
+      has_next: boolean
+      has_prev: boolean
+    }
+  }> => {
+    const queryParams = new URLSearchParams()
+    if (params?.page) queryParams.append('page', params.page.toString())
+    if (params?.size) queryParams.append('size', params.size.toString())
+    if (params?.status) queryParams.append('status', params.status)
+    if (params?.project_type) queryParams.append('project_type', params.project_type)
+    if (params?.search) queryParams.append('search', params.search)
+    
+    const response = await api.get(`/projects/?${queryParams.toString()}`)
+    return response as any
   },
 
   // 获取单个项目
@@ -515,7 +537,24 @@ export const bilibiliApi = {
   // 获取所有YouTube下载任务
   getAllYouTubeTasks: async (): Promise<BilibiliDownloadTask[]> => {
     return api.get('/youtube/tasks')
-  }
+  },
+
+  // B站登录管理
+  startLogin: async (force = false): Promise<{ status: string; message: string }> => {
+    return api.post(`/bilibili/login/start?force=${force}`)
+  },
+  getLoginStatus: async (): Promise<{
+    status: string
+    cookie_valid: boolean
+    cookie_age_hours: number | null
+    authenticated: boolean
+    browser_profile: boolean
+  }> => {
+    return api.get('/bilibili/login/status')
+  },
+  clearLogin: async (): Promise<{ status: string; message: string }> => {
+    return api.delete('/bilibili/login/cookies')
+  },
 }
 
 // 抖音相关API

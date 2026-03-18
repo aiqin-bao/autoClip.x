@@ -90,9 +90,6 @@ class AutoPipelineService:
                 
                 logger.info(f"项目 {project_id} 状态已更新为处理中")
                 
-                # 提交Celery任务
-                logger.info(f"准备提交Celery任务: {project_id}")
-                
                 # 查找项目文件路径
                 from ..core.config import get_data_directory
                 data_dir = get_data_directory()
@@ -121,22 +118,18 @@ class AutoPipelineService:
                     ))
                 logger.info(f"任务已提交到 TaskManager: pipeline_{project_id}")
 
-                if True:
-                    # 更新任务记录
-                    task.status = TaskStatus.RUNNING
-                    task.started_at = datetime.utcnow()
-                    db.commit()
-                    
-                    result = {
-                        "status": "started",
-                        "message": "流水线处理已启动",
-                        "project_id": project_id,
-                        "task_id": task.id,
-                        "pipeline_key": f"pipeline_{project_id}",
-                    }
-                else:
-                    error_msg = task_result.get('error', '未知错误')
-                    raise ValueError(f"提交Celery任务失败: {error_msg}")
+                # 更新任务记录
+                task.status = TaskStatus.RUNNING
+                task.started_at = datetime.utcnow()
+                db.commit()
+
+                result = {
+                    "status": "started",
+                    "message": "流水线处理已启动",
+                    "project_id": project_id,
+                    "task_id": task.id,
+                    "pipeline_key": f"pipeline_{project_id}",
+                }
                 
                 return result
                 

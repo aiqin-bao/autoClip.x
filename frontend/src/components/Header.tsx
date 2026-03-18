@@ -57,7 +57,7 @@ const Header: React.FC = () => {
             filter: 'drop-shadow(0 2px 4px rgba(79, 172, 254, 0.2))'
           }}
         >
-          AutoClip
+          AutoClip.X
         </span>
       </div>
       

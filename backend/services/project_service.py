@@ -107,28 +107,48 @@ class ProjectService(BaseService[Project, ProjectCreate, ProjectUpdate, ProjectR
         pagination: PaginationParams,
         filters: Optional[ProjectFilter] = None
     ) -> ProjectListResponse:
-        """Get paginated projects with filtering."""
-        # Convert filters to dict
-        filter_dict = {}
+        """Get paginated projects with filtering, ordered by created_at DESC."""
+        from ..models.project import Project as ProjectModel
+        from sqlalchemy import desc
+
+        skip = (pagination.page - 1) * pagination.size
+        limit = pagination.size
+
+        # 构建基础查询，始终按创建时间倒序（最新在前）
+        query = self.db.query(ProjectModel)
+
+        # 应用过滤条件
         if filters:
             filter_data = filters.model_dump()
-            filter_dict = {k: v for k, v in filter_data.items() if v is not None}
-        
-        items, pagination_response = self.get_paginated(pagination, filter_dict)
-        
+            for k, v in filter_data.items():
+                if v is not None and hasattr(ProjectModel, k):
+                    query = query.filter(getattr(ProjectModel, k) == v)
+
+        total = query.count()
+        items = query.order_by(desc(ProjectModel.created_at)).offset(skip).limit(limit).all()
+
+        pages = (total + pagination.size - 1) // pagination.size
+        pagination_response = PaginationResponse(
+            page=pagination.page,
+            size=pagination.size,
+            total=total,
+            pages=pages,
+            has_next=pagination.page < pages,
+            has_prev=pagination.page > 1,
+        )
+
         # Convert to response schemas
         project_responses = []
         for project in items:
-            # Get actual statistics for each project
             from ..models.clip import Clip
             from ..models.collection import Collection
             from ..models.task import Task
-            
+
             project_id = str(project.id)
             total_clips = self.db.query(Clip).filter(Clip.project_id == project_id).count()
             total_collections = self.db.query(Collection).filter(Collection.project_id == project_id).count()
             total_tasks = self.db.query(Task).filter(Task.project_id == project_id).count()
-            
+
             project_responses.append(ProjectResponse(
                 id=str(getattr(project, 'id', '')),
                 name=str(getattr(project, 'name', '')),
@@ -137,8 +157,8 @@ class ProjectService(BaseService[Project, ProjectCreate, ProjectUpdate, ProjectR
                 status=ProjectStatus(getattr(project, 'status').value) if hasattr(project, 'status') and getattr(project, 'status', None) is not None else ProjectStatus.PENDING,
                 source_url=project.project_metadata.get("source_url") if getattr(project, 'project_metadata', None) else None,
                 source_file=str(getattr(project, 'video_path', '')) if getattr(project, 'video_path', None) is not None else None,
-                video_path=str(getattr(project, 'video_path', '')) if getattr(project, 'video_path', None) is not None else None,  # 添加video_path字段供前端使用
-                thumbnail=getattr(project, 'thumbnail', None),  # 从数据库获取缩略图
+                video_path=str(getattr(project, 'video_path', '')) if getattr(project, 'video_path', None) is not None else None,
+                thumbnail=getattr(project, 'thumbnail', None),
                 settings=getattr(project, 'processing_config', {}) or {},
                 created_at=self._convert_utc_to_local(getattr(project, 'created_at', None)),
                 updated_at=self._convert_utc_to_local(getattr(project, 'updated_at', None)),
@@ -147,7 +167,7 @@ class ProjectService(BaseService[Project, ProjectCreate, ProjectUpdate, ProjectR
                 total_collections=total_collections,
                 total_tasks=total_tasks
             ))
-        
+
         return ProjectListResponse(
             items=project_responses,
             pagination=pagination_response

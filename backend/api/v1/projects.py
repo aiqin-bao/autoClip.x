@@ -505,8 +505,8 @@ async def retry_processing(
                         download_tasks[download_task_id] = task
                         
                         # 异步启动下载任务
-                        from .async_task_manager import task_manager
-                        await task_manager.create_safe_task(
+                        from .async_task_manager import task_manager as async_task_manager
+                        await async_task_manager.create_safe_task(
                             f"bilibili_redownload_{download_task_id}",
                             process_download_task,
                             download_task_id,
@@ -536,8 +536,8 @@ async def retry_processing(
                         download_task_id = str(uuid.uuid4())
                         
                         # 异步启动下载任务
-                        from .async_task_manager import task_manager
-                        await task_manager.create_safe_task(
+                        from .async_task_manager import task_manager as async_task_manager
+                        await async_task_manager.create_safe_task(
                             f"youtube_redownload_{download_task_id}",
                             process_youtube_download_task,
                             download_task_id,

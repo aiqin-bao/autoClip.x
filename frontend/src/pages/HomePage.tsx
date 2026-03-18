@@ -5,7 +5,8 @@ import {
   Select, 
   Spin, 
   Empty,
-  message 
+  message,
+  Pagination 
 } from 'antd'
 import { useNavigate } from 'react-router-dom'
 import ProjectCard from '../components/ProjectCard'
@@ -28,6 +29,9 @@ const HomePage: React.FC = () => {
   const { projects, setProjects, deleteProject, loading, setLoading } = useProjectStore()
   const [statusFilter, setStatusFilter] = useState<string>('all')
   const [activeTab, setActiveTab] = useState<'upload' | 'bilibili' | 'douyin'>('upload')
+  const [currentPage, setCurrentPage] = useState<number>(1)
+  const [pageSize, setPageSize] = useState<number>(20)
+  const [total, setTotal] = useState<number>(0)
 
   // WebSocket连接已禁用，使用新的简化进度系统
   // const handleWebSocketMessage = (message: WebSocketEventMessage) => {
@@ -69,7 +73,10 @@ const HomePage: React.FC = () => {
   // 保底轮询：处理中时 10s/次，空闲时 30s/次（大幅降低无效请求）
   const { refreshNow } = useProjectPolling({
     onProjectsUpdate: (updatedProjects) => {
-      setProjects(updatedProjects || [])
+      // 轮询时不更新分页数据，只在手动刷新时更新
+      if (updatedProjects && updatedProjects.length > 0) {
+        setProjects(updatedProjects)
+      }
     },
     enabled: true,
     interval: processingIds.length > 0 ? 10000 : 30000,
@@ -77,19 +84,25 @@ const HomePage: React.FC = () => {
 
   useEffect(() => {
     loadProjects()
-  }, [])
+  }, [currentPage, pageSize, statusFilter])
 
   const loadProjects = async () => {
     setLoading(true)
     try {
-      // 从后端API获取真实项目数据
-      const projects = await projectApi.getProjects()
-      setProjects(projects || [])
+      // 从后端API获取真实项目数据，传入分页参数
+      const response = await projectApi.getProjects({
+        page: currentPage,
+        size: pageSize,
+        status: statusFilter === 'all' ? undefined : statusFilter
+      })
+      setProjects(response.items || [])
+      setTotal(response.pagination?.total || 0)
     } catch (error) {
       message.error('加载项目失败')
       console.error('Load projects error:', error)
       // 如果API调用失败，设置空数组
       setProjects([])
+      setTotal(0)
     } finally {
       setLoading(false)
     }
@@ -183,15 +196,8 @@ const HomePage: React.FC = () => {
     navigate(`/project/${project.id}`)
   }
 
+  // 后端已经处理了过滤和排序，前端直接使用
   const filteredProjects = projects
-    .filter(project => {
-      const matchesStatus = statusFilter === 'all' || project.status === statusFilter
-      return matchesStatus
-    })
-    .sort((a, b) => {
-      // 按创建时间倒序排列，最新的在前面
-      return new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-    })
 
   return (
     <Layout style={{ 
@@ -328,7 +334,7 @@ const HomePage: React.FC = () => {
                   backdropFilter: 'blur(10px)'
                 }}>
                   <Text style={{ color: '#4facfe', fontWeight: 600, fontSize: '14px' }}>
-                    共 {filteredProjects.length} 个项目
+                    共 {total} 个项目
                   </Text>
                 </div>
               </div>
@@ -341,7 +347,10 @@ const HomePage: React.FC = () => {
                 <Select
                   placeholder="选择状态"
                   value={statusFilter}
-                  onChange={setStatusFilter}
+                  onChange={(value) => {
+                    setStatusFilter(value)
+                    setCurrentPage(1) // 改变筛选条件时重置到第一页
+                  }}
                   style={{ 
                     minWidth: '140px',
                     height: '36px',
@@ -440,9 +449,123 @@ const HomePage: React.FC = () => {
                  </div>
                )}
              </div>
+
+             {/* 分页组件 */}
+             {!loading && filteredProjects.length > 0 && (
+               <div style={{
+                 marginTop: '32px',
+                 display: 'flex',
+                 justifyContent: 'center',
+                 alignItems: 'center',
+                 gap: '16px',
+                 paddingTop: '24px',
+                 borderTop: '1px solid rgba(79, 172, 254, 0.1)'
+               }}>
+                 <Pagination
+                   current={currentPage}
+                   pageSize={pageSize}
+                   total={total}
+                   onChange={(page, size) => {
+                     setCurrentPage(page)
+                     if (size !== pageSize) {
+                       setPageSize(size)
+                       setCurrentPage(1) // 改变每页条数时重置到第一页
+                     }
+                   }}
+                   showSizeChanger
+                   showQuickJumper
+                   pageSizeOptions={['20', '30', '50', '100']}
+                   showTotal={(total, range) => (
+                     <span style={{ color: '#cccccc', fontSize: '14px' }}>
+                       显示 {range[0]}-{range[1]} 条，共 {total} 条
+                     </span>
+                   )}
+                   style={{
+                     display: 'flex',
+                     alignItems: 'center'
+                   }}
+                   className="custom-pagination"
+                 />
+               </div>
+             )}
            </div>
          </div>
       </Content>
+      
+      {/* 自定义分页样式 */}
+      <style>{`
+        .custom-pagination .ant-pagination-item {
+          background: rgba(255, 255, 255, 0.05);
+          border: 1px solid rgba(79, 172, 254, 0.2);
+          border-radius: 6px;
+        }
+        .custom-pagination .ant-pagination-item a {
+          color: #cccccc;
+        }
+        .custom-pagination .ant-pagination-item:hover {
+          background: rgba(79, 172, 254, 0.1);
+          border-color: rgba(79, 172, 254, 0.4);
+        }
+        .custom-pagination .ant-pagination-item:hover a {
+          color: #4facfe;
+        }
+        .custom-pagination .ant-pagination-item-active {
+          background: rgba(79, 172, 254, 0.2);
+          border-color: #4facfe;
+        }
+        .custom-pagination .ant-pagination-item-active a {
+          color: #4facfe;
+          font-weight: 600;
+        }
+        .custom-pagination .ant-pagination-prev button,
+        .custom-pagination .ant-pagination-next button,
+        .custom-pagination .ant-pagination-jump-prev button,
+        .custom-pagination .ant-pagination-jump-next button {
+          background: rgba(255, 255, 255, 0.05);
+          border: 1px solid rgba(79, 172, 254, 0.2);
+          border-radius: 6px;
+          color: #cccccc;
+        }
+        .custom-pagination .ant-pagination-prev:hover button,
+        .custom-pagination .ant-pagination-next:hover button {
+          background: rgba(79, 172, 254, 0.1);
+          border-color: rgba(79, 172, 254, 0.4);
+          color: #4facfe;
+        }
+        .custom-pagination .ant-pagination-disabled button {
+          background: rgba(255, 255, 255, 0.02);
+          border-color: rgba(79, 172, 254, 0.1);
+          color: #666666;
+        }
+        .custom-pagination .ant-select-selector {
+          background: rgba(255, 255, 255, 0.05) !important;
+          border: 1px solid rgba(79, 172, 254, 0.2) !important;
+          border-radius: 6px !important;
+          color: #cccccc !important;
+        }
+        .custom-pagination .ant-select-selector:hover {
+          background: rgba(79, 172, 254, 0.1) !important;
+          border-color: rgba(79, 172, 254, 0.4) !important;
+        }
+        .custom-pagination .ant-select-arrow {
+          color: #cccccc;
+        }
+        .custom-pagination .ant-pagination-options-quick-jumper input {
+          background: rgba(255, 255, 255, 0.05);
+          border: 1px solid rgba(79, 172, 254, 0.2);
+          border-radius: 6px;
+          color: #cccccc;
+        }
+        .custom-pagination .ant-pagination-options-quick-jumper input:hover {
+          background: rgba(79, 172, 254, 0.1);
+          border-color: rgba(79, 172, 254, 0.4);
+        }
+        .custom-pagination .ant-pagination-options-quick-jumper input:focus {
+          background: rgba(79, 172, 254, 0.1);
+          border-color: #4facfe;
+          box-shadow: 0 0 0 2px rgba(79, 172, 254, 0.1);
+        }
+      `}</style>
     </Layout>
   )
 }

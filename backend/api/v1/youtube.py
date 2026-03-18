@@ -309,24 +309,23 @@ async def process_youtube_download_task(task_id: str, request: YouTubeDownloadRe
         from ...core.config import get_data_directory
         
         data_dir = get_data_directory()
-        download_dir = data_dir / "temp"
-        download_dir.mkdir(exist_ok=True)
+        download_dir = data_dir / "temp" / task_id
+        download_dir.mkdir(parents=True, exist_ok=True)
         
         # 更新项目进度
         await update_project_download_progress(project_id, 30.0, "正在下载视频...")
         
-        # 设置下载选项
+        # 设置下载选项（只下载视频，字幕单独处理避免 429 中断整个任务）
         ydl_opts = {
             'format': 'bestvideo+bestaudio/best',
             'merge_output_format': 'mp4',
-            'writesubtitles': True,
-            'writeautomaticsub': True,  # 下载自动生成的字幕
-            'subtitleslangs': ['en', 'zh-Hans', 'zh', 'en-US', 'auto'],  # 英文和中文字幕，包括自动检测
-            'subtitlesformat': 'srt',
+            'writesubtitles': False,
+            'writeautomaticsub': False,
             'outtmpl': str(download_dir / '%(title)s.%(ext)s'),
             'noplaylist': True,
             'quiet': True,
-            'no_warnings': False,  # 显示警告信息以便调试
+            'no_warnings': False,
+            'extractor_args': {'youtube': {'player_client': ['android_vr', 'web']}},
         }
         
         if request.browser:
@@ -446,7 +445,6 @@ async def process_youtube_download_task(task_id: str, request: YouTubeDownloadRe
             
             # 移动视频文件到项目目录
             import shutil
-            from pathlib import Path
             
             if video_path:
                 video_file_path = Path(video_path)
@@ -479,25 +477,23 @@ async def process_youtube_download_task(task_id: str, request: YouTubeDownloadRe
             # 检查字幕文件是否存在，如果不存在则标记项目为失败
             srt_file_path = raw_dir / "input.srt"
             if not srt_file_path.exists():
-                logger.error(f"字幕文件不存在: {srt_file_path}，项目将标记为失败状态")
+                err_msg = (
+                    "该视频无可用字幕，且 Whisper 未安装，无法自动转录。\n"
+                    "解决方法：pip install openai-whisper 安装本地语音识别后重试。"
+                )
+                logger.error(err_msg)
                 from ...schemas.project import ProjectStatus
                 project.status = ProjectStatus.FAILED
                 if not project.processing_config:
                     project.processing_config = {}
-                project.processing_config["error_message"] = "字幕文件不存在且Whisper生成失败"
+                project.processing_config["error_message"] = err_msg
                 db.commit()
-                
-                # 更新任务状态为失败
                 download_tasks[task_id].status = "failed"
-                download_tasks[task_id].error_message = "字幕文件不存在且Whisper生成失败"
+                download_tasks[task_id].error_message = err_msg
                 download_tasks[task_id].progress = 0.0
                 download_tasks[task_id].project_id = str(project.id)
                 download_tasks[task_id].updated_at = datetime.now().isoformat()
-                
-                # 更新项目下载进度为失败
-                await update_project_download_progress(project_id, 0.0, "下载失败：字幕文件不存在")
-                
-                logger.info(f"YouTube下载任务失败: {task_id}, 项目ID: {project.id}, 原因: 字幕文件不存在")
+                await update_project_download_progress(project_id, 0.0, "下载失败：无字幕且 Whisper 未安装")
                 return
             
             # 更新项目下载进度为完成
@@ -510,6 +506,13 @@ async def process_youtube_download_task(task_id: str, request: YouTubeDownloadRe
             download_tasks[task_id].updated_at = datetime.now().isoformat()
             
             logger.info(f"YouTube下载任务完成: {task_id}, 项目ID: {project.id}")
+            
+            # 清理任务专属临时目录
+            try:
+                import shutil as _shutil
+                _shutil.rmtree(download_dir, ignore_errors=True)
+            except Exception:
+                pass
             
             # 自动启动处理流程
             try:
@@ -586,7 +589,7 @@ async def _try_youtube_subtitle_strategies(url: str, download_dir: Path, browser
 
 
 async def _try_download_with_different_formats(url: str, download_dir: Path, browser: Optional[str] = None) -> str:
-    """尝试下载不同格式的字幕"""
+    """尝试下载不同格式的字幕（不重新下载视频）"""
     import asyncio
     logger.info("尝试下载不同格式的YouTube字幕...")
     
@@ -595,14 +598,15 @@ async def _try_download_with_different_formats(url: str, download_dir: Path, bro
     for fmt in formats:
         try:
             ydl_opts = {
-                'format': 'best[ext=mp4]/best',
+                'skip_download': True,
                 'writesubtitles': True,
                 'writeautomaticsub': True,
-                'subtitleslangs': ['en', 'zh-Hans', 'zh'],
+                'subtitleslangs': ['en', 'zh-Hans', 'zh', 'zh-Hant'],
                 'subtitlesformat': fmt,
                 'outtmpl': str(download_dir / f'subtitle_%(title)s.%(ext)s'),
                 'noplaylist': True,
                 'quiet': True,
+                'extractor_args': {'youtube': {'player_client': ['android_vr', 'web']}},
             }
             
             if browser:
@@ -636,22 +640,22 @@ async def _try_download_with_different_formats(url: str, download_dir: Path, bro
 
 
 async def _try_download_with_different_langs(url: str, download_dir: Path, browser: Optional[str] = None) -> str:
-    """尝试下载不同语言的字幕"""
+    """尝试下载不同语言的字幕（不重新下载视频）"""
     import asyncio
     logger.info("尝试下载不同语言的YouTube字幕...")
     
     lang_combinations = [
-        ['en', 'en-US'],      # 英文
-        ['zh-Hans', 'zh'],    # 中文
-        ['ja', 'ja-JP'],      # 日文
-        ['ko', 'ko-KR'],      # 韩文
-        ['auto']              # 自动检测
+        ['en', 'en-US'],
+        ['zh-Hans', 'zh'],
+        ['zh-Hant'],
+        ['ja', 'ja-JP'],
+        ['ko', 'ko-KR'],
     ]
     
     for langs in lang_combinations:
         try:
             ydl_opts = {
-                'format': 'best[ext=mp4]/best',
+                'skip_download': True,
                 'writesubtitles': True,
                 'writeautomaticsub': True,
                 'subtitleslangs': langs,
@@ -659,6 +663,7 @@ async def _try_download_with_different_langs(url: str, download_dir: Path, brows
                 'outtmpl': str(download_dir / f'lang_%(title)s.%(ext)s'),
                 'noplaylist': True,
                 'quiet': True,
+                'extractor_args': {'youtube': {'player_client': ['android_vr', 'web']}},
             }
             
             if browser:

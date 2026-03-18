@@ -53,17 +53,28 @@ class BilibiliVideoInfo:
 class BilibiliDownloader:
     """B站视频下载器"""
     
-    def __init__(self, download_dir: Optional[Path] = None, browser: Optional[str] = None):
+    def __init__(self, download_dir: Optional[Path] = None, browser: Optional[str] = None,
+                 cookies_file: Optional[str] = None):
         """
         初始化下载器
-        
+
         Args:
             download_dir: 下载目录，默认为当前目录
-            browser: 浏览器类型，用于获取cookies
+            browser: 浏览器类型，用于获取 cookies（优先级低于 cookies_file）
+            cookies_file: Netscape 格式 Cookie 文件路径（来自 Playwright 登录）
         """
         self.download_dir = download_dir or Path.cwd()
         self.browser = browser
+        self.cookies_file = cookies_file
         self.download_dir.mkdir(parents=True, exist_ok=True)
+
+    def _apply_cookie_opts(self, ydl_opts: dict) -> dict:
+        """向 yt-dlp 选项注入 cookie 配置（cookies_file 优先于 browser）"""
+        if self.cookies_file:
+            ydl_opts['cookiefile'] = self.cookies_file
+        elif self.browser:
+            ydl_opts['cookiesfrombrowser'] = (self.browser.lower(),)
+        return ydl_opts
         
     def validate_bilibili_url(self, url: str) -> bool:
         """
@@ -102,9 +113,8 @@ class BilibiliDownloader:
             'quiet': True,
             'no_warnings': True,
         }
-        
-        if self.browser:
-            ydl_opts['cookiesfrombrowser'] = (self.browser.lower(),)
+
+        self._apply_cookie_opts(ydl_opts)
         
         try:
             loop = asyncio.get_event_loop()
@@ -160,10 +170,9 @@ class BilibiliDownloader:
             'progress': True,
             'no_warnings': False,  # 显示警告信息以便调试
         }
-        
-        if self.browser:
-            ydl_opts['cookiesfrombrowser'] = (self.browser.lower(),)
-        
+
+        self._apply_cookie_opts(ydl_opts)
+
         # 添加进度钩子
         if progress_callback:
             ydl_opts['progress_hooks'] = [self._create_progress_hook(progress_callback)]
@@ -255,7 +264,7 @@ class BilibiliDownloader:
                 
                 if self.browser:
                     ydl_opts['cookiesfrombrowser'] = (self.browser.lower(),)
-                
+                self._apply_cookie_opts(ydl_opts)
                 loop = asyncio.get_event_loop()
                 await loop.run_in_executor(None, self._download_sync, url, ydl_opts)
                 
@@ -309,7 +318,8 @@ class BilibiliDownloader:
             
             if self.browser:
                 ydl_opts['cookiesfrombrowser'] = (self.browser.lower(),)
-            
+            self._apply_cookie_opts(ydl_opts)
+
             loop = asyncio.get_event_loop()
             info_dict = await loop.run_in_executor(None, self._extract_info_sync, url, ydl_opts)
             
@@ -476,24 +486,26 @@ class BilibiliDownloader:
 
 # 便捷函数
 async def download_bilibili_video(
-    url: str, 
+    url: str,
     download_dir: Optional[Path] = None,
     browser: Optional[str] = None,
-    progress_callback: Optional[Callable[[str, float], None]] = None
+    progress_callback: Optional[Callable[[str, float], None]] = None,
+    cookies_file: Optional[str] = None,
 ) -> Dict[str, str]:
     """
     便捷的B站视频下载函数
-    
+
     Args:
         url: B站视频链接
         download_dir: 下载目录
-        browser: 浏览器类型
+        browser: 浏览器类型（cookies_file 优先）
         progress_callback: 进度回调函数
-        
+        cookies_file: Netscape 格式 Cookie 文件路径
+
     Returns:
         包含video_path和subtitle_path的字典
     """
-    downloader = BilibiliDownloader(download_dir, browser)
+    downloader = BilibiliDownloader(download_dir, browser, cookies_file=cookies_file)
     return await downloader.download_video_and_subtitle(url, progress_callback)
 
 async def get_bilibili_video_info(url: str, browser: Optional[str] = None) -> BilibiliVideoInfo:

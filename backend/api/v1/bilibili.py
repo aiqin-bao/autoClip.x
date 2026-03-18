@@ -283,14 +283,20 @@ async def process_download_task(task_id: str, request: BilibiliDownloadRequest, 
         
         # 下载视频
         data_dir = get_data_directory()
-        download_dir = data_dir / "temp"
-        download_dir.mkdir(exist_ok=True)
-        
+        download_dir = data_dir / "temp" / task_id
+        download_dir.mkdir(parents=True, exist_ok=True)
+
+        # 优先使用 Playwright 持久化 Cookie 文件，回退到浏览器 Cookie 读取
+        from ...utils.bilibili_playwright import get_cookies_file
+        cookies_file = get_cookies_file()
+        effective_browser = None if cookies_file else request.browser
+
         from ...utils.bilibili_downloader import download_bilibili_video
         download_result = await download_bilibili_video(
-            request.url, 
-            download_dir, 
-            request.browser
+            request.url,
+            download_dir,
+            effective_browser,
+            cookies_file=str(cookies_file) if cookies_file else None,
         )
         
         video_path = download_result.get('video_path', '')
@@ -494,3 +500,57 @@ async def process_download_task(task_id: str, request: BilibiliDownloadRequest, 
         download_tasks[task_id].status = "failed"
         download_tasks[task_id].error_message = str(e)
         download_tasks[task_id].progress = 0.0
+
+
+# ─────────────────────── 登录管理路由 ───────────────────────
+
+@router.post("/login/start")
+async def start_bilibili_login(force: bool = False):
+    """
+    启动 B站 扫码登录流程：打开 Chromium 浏览器窗口，
+    用户扫码后自动保存 Profile 并导出 Cookie 供 yt-dlp 使用。
+    """
+    from ...utils.bilibili_playwright import (
+        get_browser_login_state, open_login_window_persistent
+    )
+    if not force:
+        state = get_browser_login_state()
+        if state.get('valid', False):
+            return {
+                "status": "already_logged_in",
+                "message": "已处于登录状态，无需重新扫码。如需切换账号，请先清除后重试。",
+            }
+
+    import threading
+    def _run():
+        open_login_window_persistent(timeout_sec=300)
+    threading.Thread(target=_run, daemon=True, name='BilibiliPWLogin').start()
+    return {
+        "status": "started",
+        "message": "浏览器窗口正在打开，请在弹出的 Chromium 窗口中扫码登录 B站",
+    }
+
+
+@router.get("/login/status")
+async def bilibili_login_status():
+    """获取 B站 当前登录状态"""
+    from ...utils.bilibili_playwright import get_browser_login_state, COOKIES_FILE
+    state = get_browser_login_state()
+    valid = state.get('valid', False)
+    return {
+        "status": "success" if valid else "idle",
+        "message": "已登录" if valid else "未登录",
+        "has_cookies": COOKIES_FILE.exists(),
+        "cookie_valid": valid,
+        "cookie_age_hours": state.get('age_hours'),
+        "authenticated": state.get('logged_in', False),
+        "browser_profile": valid,
+    }
+
+
+@router.delete("/login/cookies")
+async def clear_bilibili_login():
+    """清除 B站 登录状态和 Cookie 文件"""
+    from ...utils.bilibili_playwright import clear_login_state
+    clear_login_state()
+    return {"status": "success", "message": "B站登录状态已清除"}

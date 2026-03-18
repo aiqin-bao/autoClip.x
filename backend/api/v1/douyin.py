@@ -470,11 +470,22 @@ async def get_all_douyin_tasks():
 # ---------- 登录相关路由 ----------
 
 @router.post("/login/start")
-async def start_douyin_login():
+async def start_douyin_login(force: bool = False):
     """
     启动扫码登录流程：打开真实 Chromium 浏览器窗口（持久化 Profile），
     用户在窗口内扫码/登录抖音后，浏览器 Profile 自动保存供后续无头使用。
+    force=true 时即使已登录也强制重新打开窗口。
     """
+    # 已登录且不强制刷新时直接返回
+    if not force:
+        pw_state = get_browser_login_state()
+        cookie_state = get_login_status()
+        if pw_state.get("valid", False) or cookie_state.get("cookie_valid", False):
+            return {
+                "status": "already_logged_in",
+                "message": "已处于登录状态，无需重新扫码。如需切换账号，请先清除 Cookie 后重试。",
+            }
+
     import threading
     def _run():
         open_login_window_persistent(timeout_sec=300)

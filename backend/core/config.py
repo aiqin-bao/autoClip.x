@@ -20,10 +20,6 @@ class DatabaseSettings(BaseModel):
     """数据库配置"""
     url: str = Field(default='sqlite:///./data/autoclip.db', validation_alias=AliasChoices('DATABASE_URL'))
 
-class RedisSettings(BaseModel):
-    """Redis配置"""
-    url: str = Field(default='redis://localhost:6379/0', validation_alias=AliasChoices('REDIS_URL'))
-
 class ProcessingSettings(BaseModel):
     """处理配置"""
     chunk_size: int = Field(default=5000, validation_alias=AliasChoices('PROCESSING_CHUNK_SIZE'))
@@ -48,7 +44,6 @@ class Settings(BaseSettings):
 
     # 直接定义字段，不使用嵌套的BaseModel
     database_url: str = Field(default='sqlite:///./data/autoclip.db', validation_alias=AliasChoices('DATABASE_URL'))
-    redis_url: str = Field(default='redis://localhost:6379/0', validation_alias=AliasChoices('REDIS_URL'))
     api_dashscope_api_key: str = Field(default='', validation_alias=AliasChoices('API_DASHSCOPE_API_KEY'))
     api_model_name: str = Field(default='qwen-plus', validation_alias=AliasChoices('API_MODEL_NAME'))
     api_max_tokens: int = Field(default=4096, validation_alias=AliasChoices('API_MAX_TOKENS'))
@@ -102,10 +97,6 @@ def get_database_url() -> str:
     """获取数据库URL"""
     return settings.database_url
 
-def get_redis_url() -> str:
-    """获取Redis URL"""
-    return settings.redis_url
-
 def get_api_key() -> Optional[str]:
     """获取API密钥"""
     return settings.api_dashscope_api_key if settings.api_dashscope_api_key else None
@@ -154,6 +145,5 @@ if __name__ == "__main__":
     # 测试配置加载
     init_paths()
     print(f"数据库URL: {get_database_url()}")
-    print(f"Redis URL: {get_redis_url()}")
     print(f"API配置: {get_model_config()}")
     print(f"处理配置: {get_processing_config()}") 

@@ -237,10 +237,15 @@ class SpeechRecognizer:
         return False
     
     def _check_whisper_availability(self) -> bool:
-        """检查本地Whisper是否可用"""
+        """检查本地Whisper是否可用（faster-whisper 优先，fallback 到 openai-whisper CLI）"""
         try:
-            result = subprocess.run(['whisper', '--help'], 
-                                  capture_output=True, text=True, timeout=5)
+            from faster_whisper import WhisperModel  # noqa: F401
+            return True
+        except ImportError:
+            pass
+        try:
+            result = subprocess.run(['whisper', '--help'],
+                                    capture_output=True, text=True, timeout=5)
             return result.returncode == 0
         except (subprocess.TimeoutExpired, FileNotFoundError):
             logger.warning("本地Whisper未安装或不可用")
@@ -501,122 +506,106 @@ class SpeechRecognizer:
             logger.error(error_msg)
             raise SpeechRecognitionError(error_msg)
     
-    def _generate_subtitle_whisper_local(self, video_path: Path, output_path: Path, 
+    def _generate_subtitle_whisper_local(self, video_path: Path, output_path: Path,
                                        config: SpeechRecognitionConfig) -> Path:
-        """使用本地Whisper生成字幕"""
+        """使用本地 Whisper 生成字幕（faster-whisper 优先，fallback 到 openai-whisper CLI）"""
         if not self.available_methods[SpeechRecognitionMethod.WHISPER_LOCAL]:
             raise SpeechRecognitionError(
-                "本地Whisper不可用，请安装whisper: pip install openai-whisper\n"
-                "同时确保已安装ffmpeg:\n"
-                "  macOS: brew install ffmpeg\n"
-                "  Ubuntu: sudo apt install ffmpeg\n"
-                "  Windows: 下载ffmpeg并添加到PATH"
+                "本地Whisper不可用，请安装：pip install faster-whisper 或 pip install openai-whisper"
             )
-        
+
+        # ── faster-whisper（Python API，速度快 3-4x）──────────────────────────
         try:
-            logger.info(f"开始使用本地Whisper生成字幕: {video_path}")
-            
-            # 检查视频文件是否存在
+            from faster_whisper import WhisperModel
+            logger.info(f"使用 faster-whisper 生成字幕: {video_path}")
+
+            device = "cpu"
+            compute_type = "int8"
+            model_size = config.model if config.model in ("tiny", "base", "small", "medium", "large-v2", "large-v3") else "base"
+
+            model = WhisperModel(model_size, device=device, compute_type=compute_type)
+
+            lang = None if config.language == LanguageCode.AUTO else config.language
+            segments, info = model.transcribe(
+                str(video_path),
+                language=lang,
+                beam_size=5,
+                vad_filter=True,
+            )
+            logger.info(f"faster-whisper 检测语言: {info.language} (概率 {info.language_probability:.2f})")
+
+            # 写 SRT
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(output_path, "w", encoding="utf-8") as f:
+                for i, seg in enumerate(segments, 1):
+                    def _fmt(t: float) -> str:
+                        h = int(t // 3600)
+                        m = int((t % 3600) // 60)
+                        s = int(t % 60)
+                        ms = int((t - int(t)) * 1000)
+                        return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+                    f.write(f"{i}\n{_fmt(seg.start)} --> {_fmt(seg.end)}\n{seg.text.strip()}\n\n")
+
+            if not output_path.exists() or output_path.stat().st_size == 0:
+                raise SpeechRecognitionError("faster-whisper 未生成有效字幕文件")
+
+            logger.info(f"faster-whisper 字幕生成成功: {output_path}")
+            return output_path
+
+        except ImportError:
+            logger.info("faster-whisper 未安装，fallback 到 openai-whisper CLI")
+        except SpeechRecognitionError:
+            raise
+        except Exception as e:
+            logger.warning(f"faster-whisper 失败: {e}，fallback 到 openai-whisper CLI")
+
+        # ── openai-whisper CLI fallback ───────────────────────────────────────
+        try:
+            logger.info(f"使用 openai-whisper CLI 生成字幕: {video_path}")
             if not video_path.exists():
                 raise SpeechRecognitionError(f"视频文件不存在: {video_path}")
-            
-            # 检查视频文件大小
-            file_size = video_path.stat().st_size
-            if file_size == 0:
-                raise SpeechRecognitionError(f"视频文件为空: {video_path}")
-            
-            # 构建whisper命令
+
             cmd = [
-                'whisper',
-                str(video_path),
+                'whisper', str(video_path),
                 '--output_dir', str(output_path.parent),
                 '--output_format', config.output_format,
-                '--model', config.model
+                '--model', config.model,
             ]
-            
-            # 添加语言参数
             if config.language != LanguageCode.AUTO:
                 cmd.extend(['--language', config.language])
-            
-            # 添加超时处理
-            logger.info(f"执行Whisper命令: {' '.join(cmd)}")
-            
-            # 根据超时配置决定是否设置超时
+
+            logger.info(f"执行命令: {' '.join(cmd)}")
+            run_kwargs = dict(capture_output=True, text=True, cwd=str(video_path.parent))
             if config.timeout > 0:
-                result = subprocess.run(
-                    cmd, 
-                    capture_output=True, 
-                    text=True, 
-                    timeout=config.timeout,
-                    cwd=str(video_path.parent)  # 设置工作目录
-                )
-            else:
-                # 无超时限制
-                result = subprocess.run(
-                    cmd, 
-                    capture_output=True, 
-                    text=True, 
-                    cwd=str(video_path.parent)  # 设置工作目录
-                )
-            
+                run_kwargs['timeout'] = config.timeout
+
+            result = subprocess.run(cmd, **run_kwargs)
+
             if result.returncode == 0:
-                # 检查输出文件是否存在
                 if output_path.exists():
-                    logger.info(f"本地Whisper字幕生成成功: {output_path}")
+                    logger.info(f"openai-whisper 字幕生成成功: {output_path}")
                     return output_path
-                else:
-                    # 尝试查找其他可能的输出文件
-                    possible_outputs = list(output_path.parent.glob(f"{video_path.stem}*.{config.output_format}"))
-                    if possible_outputs:
-                        actual_output = possible_outputs[0]
-                        logger.info(f"找到Whisper输出文件: {actual_output}")
-                        return actual_output
-                    else:
-                        raise SpeechRecognitionError(f"Whisper执行成功但未找到输出文件: {output_path}")
+                candidates = list(output_path.parent.glob(f"{video_path.stem}*.{config.output_format}"))
+                if candidates:
+                    logger.info(f"找到输出文件: {candidates[0]}")
+                    return candidates[0]
+                raise SpeechRecognitionError("Whisper 执行成功但未找到输出文件")
             else:
-                error_msg = f"本地Whisper执行失败 (返回码: {result.returncode}):\n"
-                if result.stderr:
-                    error_msg += f"错误信息: {result.stderr}\n"
-                if result.stdout:
-                    error_msg += f"输出信息: {result.stdout}"
-                
-                # 提供具体的错误解决建议
-                if "command not found" in result.stderr:
-                    error_msg += "\n\n解决方案: 请安装whisper: pip install openai-whisper"
-                elif "ffmpeg" in result.stderr.lower():
-                    error_msg += "\n\n解决方案: 请安装ffmpeg:\n  macOS: brew install ffmpeg\n  Ubuntu: sudo apt install ffmpeg"
-                elif "timeout" in result.stderr.lower():
-                    error_msg += f"\n\n解决方案: 视频处理超时，请尝试使用更小的模型 (--model tiny) 或增加超时时间"
-                
-                logger.error(error_msg)
-                raise SpeechRecognitionError(error_msg)
-                
+                raise SpeechRecognitionError(
+                    f"openai-whisper 执行失败 (code={result.returncode}): {result.stderr}"
+                )
         except subprocess.TimeoutExpired:
-            error_msg = f"本地Whisper执行超时（{config.timeout}秒）\n"
-            error_msg += "解决方案:\n"
-            error_msg += "1. 使用更小的模型: --model tiny\n"
-            error_msg += "2. 增加超时时间\n"
-            error_msg += "3. 检查视频文件是否损坏"
-            logger.error(error_msg)
-            raise SpeechRecognitionError(error_msg)
+            raise SpeechRecognitionError(f"Whisper 执行超时（{config.timeout}秒），建议换用 tiny/base 模型")
         except FileNotFoundError:
-            error_msg = "找不到whisper命令\n"
-            error_msg += "解决方案:\n"
-            error_msg += "1. 安装whisper: pip install openai-whisper\n"
-            error_msg += "2. 确保whisper在PATH中: which whisper\n"
-            error_msg += "3. 重新安装: pip uninstall openai-whisper && pip install openai-whisper"
-            logger.error(error_msg)
-            raise SpeechRecognitionError(error_msg)
+            raise SpeechRecognitionError(
+                "找不到 whisper 命令，请安装：pip install openai-whisper"
+            )
+        except SpeechRecognitionError:
+            raise
         except Exception as e:
-            error_msg = f"本地Whisper生成字幕时发生错误: {e}\n"
-            error_msg += "请检查:\n"
-            error_msg += "1. 视频文件格式是否支持\n"
-            error_msg += "2. 系统是否有足够的内存\n"
-            error_msg += "3. 是否有足够的磁盘空间"
-            logger.error(error_msg)
-            raise SpeechRecognitionError(error_msg)
-    
-    def _generate_subtitle_openai_api(self, video_path: Path, output_path: Path, 
+            raise SpeechRecognitionError(f"Whisper 生成字幕失败: {e}")
+
+    def _generate_subtitle_openai_api(self, video_path: Path, output_path: Path,
                                     config: SpeechRecognitionConfig) -> Path:
         """使用OpenAI API生成字幕"""
         if not self.available_methods[SpeechRecognitionMethod.OPENAI_API]:
