@@ -66,7 +66,7 @@ FastAPI 后端 (单进程)
 
 ```bash
 # 克隆项目
-git clone <your-repo-url>
+git@github.com:aiqin-bao/autoClip.x.git
 cd autoclip.x
 
 # 配置环境变量
