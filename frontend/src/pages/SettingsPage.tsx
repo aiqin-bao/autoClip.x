@@ -357,7 +357,7 @@ const SettingsPage: React.FC = () => {
             </Card>
           </TabPane>
 
-          <TabPane tab="B站管理" key="bilibili">
+          {/* <TabPane tab="B站管理" key="bilibili">
             <Card title="B站账号管理" className="settings-card">
               <div style={{ textAlign: 'center', padding: '40px 20px' }}>
                 <div style={{ marginBottom: '24px' }}>
@@ -447,17 +447,17 @@ const SettingsPage: React.FC = () => {
                 </div>
               </div>
             </Card>
-          </TabPane>
+          </TabPane> */}
         </Tabs>
 
         {/* B站管理弹窗 */}
-        <BilibiliManager
+        {/* <BilibiliManager
           visible={showBilibiliManager}
           onClose={() => setShowBilibiliManager(false)}
           onUploadSuccess={() => {
             message.success('操作成功')
           }}
-        />
+        /> */}
       </div>
     </Content>
   )

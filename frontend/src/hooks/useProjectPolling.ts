@@ -35,8 +35,11 @@ export const useProjectPolling = ({
         }
         
         console.log('Polling projects...')
-        const projects = await projectApi.getProjects()
-        console.log('Polled projects:', projects)
+        const response = await projectApi.getProjects()
+        console.log('Polled projects response:', response)
+        
+        // 从响应中提取 items 数组
+        const projects = response.items || []
         
         const hasProcessingProjects = projects.some(p => p.status === 'processing')
         
@@ -73,7 +76,9 @@ export const useProjectPolling = ({
 
   const refreshNow = async () => {
     try {
-      const projects = await projectApi.getProjects()
+      const response = await projectApi.getProjects()
+      // 从响应中提取 items 数组
+      const projects = response.items || []
       if (onProjectsUpdate) {
         onProjectsUpdate(projects)
       }

@@ -607,6 +607,33 @@ export const douyinApi = {
   },
 }
 
+// 快手相关API
+export const kuaishouApi = {
+  // 解析快手视频信息
+  parseVideoInfo: async (shareText: string): Promise<{success: boolean, extracted_url: string, video_info: BilibiliVideoInfo}> => {
+    const formData = new FormData()
+    formData.append('share_text', shareText)
+    return api.post('/kuaishou/parse', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    })
+  },
+
+  // 创建快手下载任务
+  createDownloadTask: async (data: { share_text: string; project_name: string; video_category: string }): Promise<BilibiliDownloadTask> => {
+    return api.post('/kuaishou/download', data)
+  },
+
+  // 获取下载任务状态
+  getTaskStatus: async (taskId: string): Promise<BilibiliDownloadTask> => {
+    return api.get(`/kuaishou/tasks/${taskId}`)
+  },
+
+  // 获取所有快手下载任务
+  getAllTasks: async (): Promise<BilibiliDownloadTask[]> => {
+    return api.get('/kuaishou/tasks')
+  },
+}
+
 // 系统状态相关API
 export const systemApi = {
   // 获取系统状态

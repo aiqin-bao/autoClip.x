@@ -13,6 +13,7 @@ import ProjectCard from '../components/ProjectCard'
 import FileUpload from '../components/FileUpload'
 import BilibiliDownload from '../components/BilibiliDownload'
 import DouyinDownload from '../components/DouyinDownload'
+import KuaishouDownload from '../components/KuaishouDownload'
 
 import { projectApi } from '../services/api'
 import { Project, useProjectStore } from '../store/useProjectStore'
@@ -28,7 +29,7 @@ const HomePage: React.FC = () => {
   const navigate = useNavigate()
   const { projects, setProjects, deleteProject, loading, setLoading } = useProjectStore()
   const [statusFilter, setStatusFilter] = useState<string>('all')
-  const [activeTab, setActiveTab] = useState<'upload' | 'bilibili' | 'douyin'>('upload')
+  const [activeTab, setActiveTab] = useState<'upload' | 'bilibili' | 'douyin' | 'kuaishou'>('upload')
   const [currentPage, setCurrentPage] = useState<number>(1)
   const [pageSize, setPageSize] = useState<number>(20)
   const [total, setTotal] = useState<number>(0)
@@ -235,6 +236,7 @@ const HomePage: React.FC = () => {
                 {([
                   { key: 'bilibili', label: '📺 B站/YouTube' },
                   { key: 'douyin',   label: '🎵 抖音' },
+                  { key: 'kuaishou', label: '⚡ 快手' },
                   { key: 'upload',   label: '📁 文件导入' },
                 ] as const).map(tab => (
                   <button
@@ -246,10 +248,16 @@ const HomePage: React.FC = () => {
                       background: activeTab === tab.key
                         ? tab.key === 'douyin'
                           ? 'rgba(255, 77, 79, 0.2)'
+                          : tab.key === 'kuaishou'
+                          ? 'rgba(255, 120, 0, 0.2)'
                           : 'rgba(79, 172, 254, 0.2)'
                         : 'transparent',
                       color: activeTab === tab.key
-                        ? tab.key === 'douyin' ? '#ff7875' : '#4facfe'
+                        ? tab.key === 'douyin' 
+                          ? '#ff7875' 
+                          : tab.key === 'kuaishou'
+                          ? '#ff7800'
+                          : '#4facfe'
                         : '#cccccc',
                       cursor: 'pointer',
                       fontSize: '14px',
@@ -258,6 +266,8 @@ const HomePage: React.FC = () => {
                       border: activeTab === tab.key
                         ? tab.key === 'douyin'
                           ? '1px solid rgba(255, 77, 79, 0.4)'
+                          : tab.key === 'kuaishou'
+                          ? '1px solid rgba(255, 120, 0, 0.4)'
                           : '1px solid rgba(79, 172, 254, 0.4)'
                         : '1px solid transparent',
                       whiteSpace: 'nowrap',
@@ -278,6 +288,11 @@ const HomePage: React.FC = () => {
                 )}
                 {activeTab === 'douyin' && (
                   <DouyinDownload onDownloadSuccess={async (projectId: string) => {
+                    await loadProjects()
+                  }} />
+                )}
+                {activeTab === 'kuaishou' && (
+                  <KuaishouDownload onDownloadSuccess={async (projectId: string) => {
                     await loadProjects()
                   }} />
                 )}

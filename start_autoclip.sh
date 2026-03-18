@@ -1,9 +1,9 @@
 #!/bin/bash
 
-# AutoClip 一键启动脚本
+# AutoClip.x 一键启动脚本
 # 版本: 2.0
 # 功能: 启动完整的AutoClip系统（后端API + 前端界面）
-# 注：已移除 Redis 和 Celery Worker，使用内置 asyncio TaskManager
+
 
 set -euo pipefail
 
@@ -151,6 +151,228 @@ stop_process() {
 }
 
 # =============================================================================
+# 安装辅助函数
+# =============================================================================
+
+install_homebrew() {
+    log_step "安装 Homebrew"
+    log_info "Homebrew 是 macOS 的包管理器，用于安装 Python 和 Node.js"
+    
+    if command_exists brew; then
+        log_success "Homebrew 已安装"
+        return 0
+    fi
+    
+    log_warning "Homebrew 未安装，正在自动安装..."
+    log_info "正在安装 Homebrew..."
+    
+    # 自动安装 Homebrew（非交互式）
+    NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+    
+    # 添加 Homebrew 到 PATH（适配 Apple Silicon 和 Intel Mac）
+    if [[ -f "/opt/homebrew/bin/brew" ]]; then
+        eval "$(/opt/homebrew/bin/brew shellenv)"
+    elif [[ -f "/usr/local/bin/brew" ]]; then
+        eval "$(/usr/local/bin/brew shellenv)"
+    fi
+    
+    if command_exists brew; then
+        log_success "Homebrew 安装成功"
+        return 0
+    else
+        log_error "Homebrew 安装失败，请手动安装: https://brew.sh"
+        return 1
+    fi
+}
+
+install_python() {
+    log_step "安装 Python"
+    
+    if command_exists python3; then
+        local python_version=$(python3 --version 2>&1 | cut -d' ' -f2)
+        log_success "Python 已安装 (版本: $python_version)"
+        return 0
+    fi
+    
+    log_warning "Python 未安装，正在自动安装..."
+    
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        # macOS
+        log_info "检测到 macOS 系统"
+        
+        if ! command_exists brew; then
+            install_homebrew || return 1
+        fi
+        
+        log_info "正在通过 Homebrew 安装 Python..."
+        brew install python@3.12
+        
+        if command_exists python3; then
+            log_success "Python 安装成功"
+            return 0
+        else
+            log_error "Python 安装失败，请手动安装: https://www.python.org/downloads/"
+            return 1
+        fi
+        
+    elif [[ "$OSTYPE" == "linux-gnu"* ]]; then
+        # Linux
+        log_info "检测到 Linux 系统"
+        log_info "正在通过包管理器安装 Python..."
+        
+        # 检测 Linux 发行版并自动安装
+        if command_exists apt-get; then
+            # Debian/Ubuntu
+            log_info "使用 apt-get 安装..."
+            sudo apt-get update -qq
+            sudo apt-get install -y python3 python3-pip python3-venv
+        elif command_exists yum; then
+            # CentOS/RHEL
+            log_info "使用 yum 安装..."
+            sudo yum install -y python3 python3-pip
+        elif command_exists dnf; then
+            # Fedora
+            log_info "使用 dnf 安装..."
+            sudo dnf install -y python3 python3-pip
+        else
+            log_error "无法识别的 Linux 发行版，请手动安装 Python"
+            return 1
+        fi
+        
+        if command_exists python3; then
+            log_success "Python 安装成功"
+            return 0
+        else
+            log_error "Python 安装失败，请手动安装: https://www.python.org/downloads/"
+            return 1
+        fi
+    else
+        log_error "不支持的操作系统，请手动安装 Python: https://www.python.org/downloads/"
+        return 1
+    fi
+}
+
+install_nodejs() {
+    log_step "安装 Node.js"
+    
+    if command_exists node && command_exists npm; then
+        local node_version=$(node --version)
+        log_success "Node.js 已安装 (版本: $node_version)"
+        return 0
+    fi
+    
+    log_warning "Node.js 未安装，正在自动安装..."
+    
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        # macOS
+        log_info "检测到 macOS 系统"
+        
+        if ! command_exists brew; then
+            install_homebrew || return 1
+        fi
+        
+        log_info "正在通过 Homebrew 安装 Node.js..."
+        brew install node
+        
+        if command_exists node && command_exists npm; then
+            log_success "Node.js 安装成功"
+            return 0
+        else
+            log_error "Node.js 安装失败，请手动安装: https://nodejs.org/"
+            return 1
+        fi
+        
+    elif [[ "$OSTYPE" == "linux-gnu"* ]]; then
+        # Linux
+        log_info "检测到 Linux 系统"
+        log_info "正在通过包管理器安装 Node.js..."
+        
+        # 使用 NodeSource 仓库安装最新 LTS 版本
+        if command_exists curl; then
+            log_info "添加 NodeSource 仓库..."
+            curl -fsSL https://deb.nodesource.com/setup_lts.x | sudo -E bash - 2>/dev/null
+            
+            if command_exists apt-get; then
+                log_info "使用 apt-get 安装..."
+                sudo apt-get install -y nodejs
+            elif command_exists yum; then
+                log_info "使用 yum 安装..."
+                sudo yum install -y nodejs
+            elif command_exists dnf; then
+                log_info "使用 dnf 安装..."
+                sudo dnf install -y nodejs
+            fi
+        else
+            log_error "需要 curl 才能安装 Node.js，请先安装 curl"
+            return 1
+        fi
+        
+        if command_exists node && command_exists npm; then
+            log_success "Node.js 安装成功"
+            return 0
+        else
+            log_error "Node.js 安装失败，请手动安装: https://nodejs.org/"
+            return 1
+        fi
+    else
+        log_error "不支持的操作系统，请手动安装 Node.js: https://nodejs.org/"
+        return 1
+    fi
+}
+
+create_virtualenv() {
+    log_step "创建 Python 虚拟环境"
+    
+    if [[ -d "venv" ]]; then
+        log_success "虚拟环境已存在"
+        return 0
+    fi
+    
+    log_warning "虚拟环境不存在，正在自动创建..."
+    log_info "正在创建虚拟环境..."
+    
+    python3 -m venv venv
+    
+    if [[ -d "venv" ]]; then
+        log_success "虚拟环境创建成功"
+        return 0
+    else
+        log_error "虚拟环境创建失败"
+        return 1
+    fi
+}
+
+# =============================================================================
+# 环境检查函数
+# =============================================================================
+    
+    if [[ -d "venv" ]]; then
+        log_success "虚拟环境已存在"
+        return 0
+    fi
+    
+    log_warning "虚拟环境不存在"
+    echo -e "${YELLOW}是否自动创建虚拟环境? (y/n)${NC}"
+    read -r response
+    
+    if [[ "$response" =~ ^[Yy]$ ]]; then
+        log_info "正在创建虚拟环境..."
+        python3 -m venv venv
+        
+        if [[ -d "venv" ]]; then
+            log_success "虚拟环境创建成功"
+            return 0
+        else
+            log_error "虚拟环境创建失败"
+            return 1
+        fi
+    else
+        log_error "需要虚拟环境才能继续，请手动创建: python3 -m venv venv"
+        return 1
+    fi
+}
+
+# =============================================================================
 # 环境检查函数
 # =============================================================================
 
@@ -166,31 +388,57 @@ check_environment() {
         log_warning "未识别的操作系统: $OSTYPE"
     fi
     
-    # 检查必要的命令
-    local required_commands=("python3" "node" "npm")
-    for cmd in "${required_commands[@]}"; do
-        if command_exists "$cmd"; then
-            log_success "$cmd 已安装"
-        else
-            log_error "$cmd 未安装，请先安装"
+    # 检查并安装 Python
+    if ! command_exists python3; then
+        log_warning "Python 未安装"
+        install_python || {
+            log_error "Python 安装失败，无法继续"
+            echo ""
+            echo -e "${CYAN}手动安装指南:${NC}"
+            echo -e "  macOS:   brew install python@3.12"
+            echo -e "  Ubuntu:  sudo apt-get install python3 python3-pip python3-venv"
+            echo -e "  CentOS:  sudo yum install python3 python3-pip"
+            echo -e "  官网:    https://www.python.org/downloads/"
             exit 1
-        fi
-    done
-    
-    # 检查Python版本
-    local python_version=$(python3 --version 2>&1 | cut -d' ' -f2)
-    log_info "Python 版本: $python_version"
-    
-    # 检查Node.js版本
-    local node_version=$(node --version)
-    log_info "Node.js 版本: $node_version"
-    
-    # 检查虚拟环境
-    if [[ ! -d "venv" ]]; then
-        log_error "虚拟环境不存在，请先创建: python3 -m venv venv"
-        exit 1
+        }
+    else
+        local python_version=$(python3 --version 2>&1 | cut -d' ' -f2)
+        log_success "Python 已安装 (版本: $python_version)"
     fi
-    log_success "虚拟环境存在"
+    
+    # 检查并安装 Node.js
+    if ! command_exists node || ! command_exists npm; then
+        log_warning "Node.js 未安装"
+        install_nodejs || {
+            log_error "Node.js 安装失败，无法继续"
+            echo ""
+            echo -e "${CYAN}手动安装指南:${NC}"
+            echo -e "  macOS:   brew install node"
+            echo -e "  Ubuntu:  curl -fsSL https://deb.nodesource.com/setup_lts.x | sudo -E bash -"
+            echo -e "           sudo apt-get install -y nodejs"
+            echo -e "  官网:    https://nodejs.org/"
+            exit 1
+        }
+    else
+        local node_version=$(node --version)
+        local npm_version=$(npm --version)
+        log_success "Node.js 已安装 (版本: $node_version)"
+        log_success "npm 已安装 (版本: $npm_version)"
+    fi
+    
+    # 检查并创建虚拟环境
+    if [[ ! -d "venv" ]]; then
+        log_warning "虚拟环境不存在"
+        create_virtualenv || {
+            log_error "虚拟环境创建失败，无法继续"
+            echo ""
+            echo -e "${CYAN}手动创建虚拟环境:${NC}"
+            echo -e "  python3 -m venv venv"
+            exit 1
+        }
+    else
+        log_success "虚拟环境存在"
+    fi
     
     # 检查项目结构
     local required_dirs=("backend" "frontend" "data")
@@ -359,6 +607,8 @@ start_backend() {
     fi
     
     log_info "启动后端服务 (端口: $BACKEND_PORT)..."
+    log_info "注意: 系统使用内置 asyncio TaskManager，无需外部 Worker"
+    
     nohup python -m uvicorn backend.main:app \
         --host 0.0.0.0 \
         --port "$BACKEND_PORT" \
@@ -377,6 +627,7 @@ start_backend() {
     # 等待后端启动
     if wait_for_service "http://localhost:$BACKEND_PORT/api/v1/health/" "$BACKEND_STARTUP_TIMEOUT" "后端服务"; then
         log_success "后端服务已启动 (PID: $backend_pid)"
+        log_success "内置 TaskManager 和 Scheduler 已自动启动"
     else
         log_error "后端服务启动失败"
         log_info "查看日志: tail -f $BACKEND_LOG"
@@ -494,6 +745,11 @@ show_system_info() {
     echo -e "  ${ICON_WEB} API 文档:     http://localhost:$BACKEND_PORT/docs"
     echo -e "  ${ICON_HEALTH} 健康检查:   http://localhost:$BACKEND_PORT/api/v1/health/"
     echo ""
+    echo -e "${CYAN}⚙️  内置服务:${NC}"
+    echo -e "  ${ICON_WORKER} TaskManager:  已启动（asyncio 内置）"
+    echo -e "  ${ICON_GEAR} Scheduler:    已启动（定时任务）"
+    echo -e "  ${ICON_DATABASE} ProgressStore: 已启动（内存存储）"
+    echo ""
     echo -e "${CYAN}📝 日志文件:${NC}"
     echo -e "  后端日志: tail -f $BACKEND_LOG"
     echo -e "  前端日志: tail -f $FRONTEND_LOG"
@@ -503,10 +759,11 @@ show_system_info() {
     echo ""
     echo -e "${YELLOW}💡 使用说明:${NC}"
     echo -e "  1. 访问 http://localhost:$FRONTEND_PORT 使用前端界面"
-    echo -e "  2. 上传视频文件或输入B站链接"
+    echo -e "  2. 上传视频文件或输入B站/抖音/快手链接"
     echo -e "  3. 系统将自动启动AI处理流水线"
     echo -e "  4. 实时查看处理进度和结果"
     echo ""
+
 }
 
 # =============================================================================
@@ -528,7 +785,7 @@ main() {
     # 启动服务
     setup_environment
     init_database
-    start_backend
+    start_backend  # 后端服务（包含内置 TaskManager 和 Scheduler）
     start_frontend
     
     # 健康检查
